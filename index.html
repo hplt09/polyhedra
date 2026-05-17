@@ -253,16 +253,9 @@
         cursor: pointer;
       }
 
-      .mobile-only {
-        display: none;
-      }
-
       /* Mobile tweaks — larger tap targets, hide PC-only controls/hints,
          compact panel. */
       @media (max-width: 767px) {
-        .mobile-only {
-          display: block;
-        }
         #gl {
           cursor: default;
         }
@@ -306,7 +299,6 @@
             <b>TAB AUDIO</b> — 別タブで再生中の BGM に同期します（PC向け）
           </div>
           <div>無音時は画面タップで形と配色が切り替わります</div>
-          <div class="mobile-only">端末を振ると一気に切り替わります</div>
         </div>
         <button class="splash-cta">tap to enter</button>
       </div>

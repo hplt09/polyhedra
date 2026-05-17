@@ -1483,94 +1483,13 @@ function triggerDrop() {
   swapShape();
 }
 
-// ---------------------------------------------------------------------------
-// Device-motion shake detection — on mobile, shaking the phone fires a
-// drop-like event (palette cycle + shape swap + shockwave + camera shake).
-// Uses a vector-jerk approximation (frame-to-frame Δa magnitude) which is
-// more sensitive to direction changes than the scalar magnitude delta.
-// iOS 13+ requires explicit permission via DeviceMotionEvent.requestPermission;
-// other platforms bind the listener directly.
-// ---------------------------------------------------------------------------
-const SHAKE_JERK_THRESHOLD = 5; // |Δa| in m/s² between consecutive samples
-const SHAKE_COOLDOWN_MS = 250;
-let lastAx = 0;
-let lastAy = 0;
-let lastAz = 0;
-let lastShakeMs = 0;
-function onDeviceMotion(e: DeviceMotionEvent) {
-  const a = e.accelerationIncludingGravity;
-  if (!a || a.x == null || a.y == null || a.z == null) return;
-  const dx = a.x - lastAx;
-  const dy = a.y - lastAy;
-  const dz = a.z - lastAz;
-  lastAx = a.x;
-  lastAy = a.y;
-  lastAz = a.z;
-  const jerk = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  const now = performance.now();
-  if (jerk > SHAKE_JERK_THRESHOLD && now - lastShakeMs > SHAKE_COOLDOWN_MS) {
-    lastShakeMs = now;
-    onShake();
-  }
-}
-function onShake() {
-  // Big satisfying response — drop-like motion, palette cycle, shape swap.
-  dropTimer = DROP_FRAMES;
-  shockwaves.push({
-    age: 0,
-    strength: 0.75,
-    rotation: Math.random() * Math.PI * 2,
-  });
-  shakeTimer = SHAKE_FRAMES;
-  shakeStrength = 26;
-  spawnParticles(65, 0.75);
-  const m = Math.min(cssW, cssH) * 0.18;
-  targetFocalX = m + Math.random() * (cssW - 2 * m);
-  const yMax = IS_MOBILE ? cssH * 0.65 : cssH - m;
-  targetFocalY = m + Math.random() * (yMax - m);
-  dropCount++;
-  bounceVelY -= 0.7 * KICK_IMPULSE;
-  // Cycle to a different palette so a shake reads as a section change.
-  const others = [0, 1, 2].filter((mi) => mi !== currentBgIdx);
-  currentBgIdx = others[(Math.random() * others.length) | 0];
-  swapShape();
-}
-async function initDeviceMotion() {
-  const motionAny = DeviceMotionEvent as unknown as {
-    requestPermission?: () => Promise<"granted" | "denied">;
-  };
-  if (typeof motionAny.requestPermission === "function") {
-    try {
-      const state = await motionAny.requestPermission();
-      if (state !== "granted") {
-        audioStatus.textContent = "motion: 権限なし";
-        return;
-      }
-    } catch {
-      audioStatus.textContent = "motion: 取得失敗";
-      return;
-    }
-  }
-  window.addEventListener("devicemotion", onDeviceMotion);
-  // Brief confirmation so the user knows the listener is bound — if they
-  // never see this string, permission was denied or the sensor is missing.
-  audioStatus.textContent = "motion: enabled — 振ってみてください";
-  setTimeout(() => {
-    if (audioStatus.textContent?.startsWith("motion:")) {
-      audioStatus.textContent = "";
-    }
-  }, 4000);
-}
-
 const splash = document.getElementById("splash");
 if (splash) {
   // Pointerdown fires before the window listener below — stopPropagation
-  // prevents the dismiss tap from also triggering a shape swap. Also use
-  // this first user gesture to request motion permission on iOS.
+  // prevents the dismiss tap from also triggering a shape swap.
   splash.addEventListener("pointerdown", (e) => {
     splash.classList.add("hidden");
     e.stopPropagation();
-    void initDeviceMotion();
   });
 }
 
