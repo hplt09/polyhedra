@@ -68,6 +68,14 @@ const KICKS_PER_INVERT_ROLL = 2;
 const INVERT_FLIP_CHANCE = 0.55;
 const SHAPE_SWAP_FRAMES = 36;
 const SWIPE_FONT = '"Bebas Neue", "Anton", "Archivo Black", sans-serif';
+const RUNIC_SWIPE_FONT = '"Madeon Runes", "Bebas Neue", sans-serif';
+const RUNIC_SWIPE_CHANCE = 0.4;
+
+// Warm up the rune font so the first runic swap uses the correct metrics
+// rather than fallback measurements.
+if ("fonts" in document) {
+  document.fonts.load("700 100px 'Madeon Runes'").catch(() => {});
+}
 const VHS_CHANCE = 0.3;
 
 const GRID_SPACING = 38;
@@ -254,6 +262,7 @@ let proliferateCount = 1; // 1 = single hero, > 1 = swarm
 
 // Per-swap randomised state.
 let vhsActive = false;
+let swipeRunic = false;
 let vhsLevel = 0; // smoothed 0..1 actually applied to shader
 
 // ---------------------------------------------------------------------------
@@ -1251,6 +1260,9 @@ function swapShape() {
   }
   // Roll for VHS tape look.
   vhsActive = Math.random() < VHS_CHANCE;
+  // Roll for runic typography on the swipe band — when true, the next
+  // shape-name reveal renders in Madeon Runes instead of Bebas Neue.
+  swipeRunic = Math.random() < RUNIC_SWIPE_CHANCE;
   const strength = audioActive ? Math.max(0.55, envBass) : 0.65;
   bounceVelY -= strength * KICK_IMPULSE;
   bounceScale = Math.max(bounceScale, strength);
@@ -1461,15 +1473,16 @@ function drawShapeSwipe() {
   hud.fillRect(0, 0, cssW, cssH);
 
   const name = SHAPES[currentShapeIdx].name.toUpperCase();
+  const swipeFont = swipeRunic ? RUNIC_SWIPE_FONT : SWIPE_FONT;
   hud.textAlign = "center";
   hud.textBaseline = "middle";
   const REF = 100;
-  hud.font = `${REF}px ${SWIPE_FONT}`;
+  hud.font = `700 ${REF}px ${swipeFont}`;
   const refWidth = hud.measureText(name).width || 1;
   const fitWidth = ((cssW * 0.95) / refWidth) * REF;
   const fitHeight = cssH * 0.85;
   const fontSize = Math.min(fitWidth, fitHeight) | 0;
-  hud.font = `${fontSize}px ${SWIPE_FONT}`;
+  hud.font = `700 ${fontSize}px ${swipeFont}`;
   hud.fillStyle = `rgb(${swipeFg.r}, ${swipeFg.g}, ${swipeFg.b})`;
   hud.fillText(name, cssW / 2, cssH / 2);
   hud.restore();
