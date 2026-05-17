@@ -262,6 +262,29 @@ let proliferateCount = 1; // 1 = single hero, > 1 = swarm
 let vhsActive = false;
 let vhsLevel = 0; // smoothed 0..1 actually applied to shader
 
+// ▽ orientation for the tetra. First rotation aligns the (1,1,1) vertex
+// axis with -Z (so the opposite face faces the camera), then a Z spin
+// places one of the upper-face vertices directly below centre — the
+// silhouette becomes an equilateral triangle pointing down.
+const TETRA_TARGET_QUAT = (() => {
+  const q1 = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(1, 1, 1).normalize(),
+    new THREE.Vector3(0, 0, -1),
+  );
+  const probe = new THREE.Vector3(1, -1, -1)
+    .normalize()
+    .applyQuaternion(q1);
+  const q2 = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 0, 1),
+    -Math.PI / 2 - Math.atan2(probe.y, probe.x),
+  );
+  return q2.multiply(q1);
+})();
+const TETRA_SHAPE_NAME = "tetra";
+const TETRA_MORPH_FRAMES = 100;
+let tetraMorphTimer = 0;
+const tetraMorphFromQuat = new THREE.Quaternion();
+
 // ---------------------------------------------------------------------------
 // Polyhedra (data + builders are pure, unchanged).
 // ---------------------------------------------------------------------------
@@ -825,6 +848,126 @@ gridMesh.position.z = -100;
 scene.add(gridMesh);
 
 // ---------------------------------------------------------------------------
+// Tetra-only backdrop — fills the screen with the tetra description rendered
+// in Madeon Runes. Drawn lazily once the rune font has loaded so glyph
+// metrics are correct. Sits between the dot grid and the hero in render
+// order, toggled on only while the tetra is locked into its ▽ pose.
+// ---------------------------------------------------------------------------
+const TETRA_RUNE_DESC =
+  "REGULAR TETRAHEDRON FOUR EQUILATERAL TRIANGULAR FACES FOUR VERTICES SIX EDGES SIMPLEST PLATONIC SOLID SCHLAFLI THREE THREE SELF DUAL TRIANGULAR PYRAMID FIRST OF FIVE PLATONIC SOLIDS DELTA    ";
+function makeTetraRuneTexture(): THREE.CanvasTexture {
+  const w = 1024;
+  const h = 1024;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const cx = c.getContext("2d")!;
+  cx.clearRect(0, 0, w, h);
+  cx.fillStyle = "#ffffff";
+  cx.font = '22px "Madeon Runes", monospace';
+  cx.textBaseline = "top";
+  const lineH = 30;
+  // Each row rotates the description so columns don't visually align into
+  // a grid — gives the field a more organic glyph weave.
+  let phase = 0;
+  for (let y = 0; y < h; y += lineH) {
+    const start = (phase * 13) % TETRA_RUNE_DESC.length;
+    const rotated =
+      TETRA_RUNE_DESC.slice(start) + TETRA_RUNE_DESC.slice(0, start);
+    cx.fillText(rotated.repeat(4), -40, y);
+    phase++;
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  return tex;
+}
+const tetraRuneUniforms = {
+  uTex: { value: null as THREE.Texture | null },
+  uColor: { value: new THREE.Color(0xff3b6b) },
+  uOpacity: { value: 0.22 },
+  uTime: { value: 0 },
+};
+const tetraRuneMat = new THREE.ShaderMaterial({
+  uniforms: tetraRuneUniforms,
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    uniform sampler2D uTex;
+    uniform vec3 uColor;
+    uniform float uOpacity;
+    uniform float uTime;
+    varying vec2 vUv;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+    float vnoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(
+        mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+        u.y
+      );
+    }
+
+    void main() {
+      float glyph = texture2D(uTex, vUv).a;
+      if (glyph < 0.02) discard;
+
+      float t = uTime * 0.001;
+      // Per-cell flash — each rune cell (~1/40 of UV ≈ one glyph) gets
+      // its own phase + frequency, so different runes light up at
+      // different moments. pow(sin, 8) makes the flash brief and pointy.
+      vec2 cellPos = floor(vUv * 40.0);
+      float seed = hash(cellPos);
+      float phase = seed * 100.0 + t * (1.2 + seed * 2.4);
+      float flash = pow(max(0.0, sin(phase)), 8.0);
+
+      // Slow gradient drift adds a subtle moving brightness wave on top
+      // so even unflashed runes shimmer a little.
+      float drift = vnoise(vUv * 5.0 + vec2(t * 0.3, t * 0.45));
+
+      float bright = 0.55 + drift * 0.6 + flash * 3.0;
+      vec3 col = uColor * bright;
+      float a = glyph * uOpacity * (0.65 + flash * 1.6);
+      gl_FragColor = vec4(col, a);
+    }
+  `,
+  transparent: true,
+  depthWrite: false,
+});
+const tetraRuneMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  tetraRuneMat,
+);
+tetraRuneMesh.position.z = -50;
+tetraRuneMesh.renderOrder = -5; // after grid (-10), before hero (default 0)
+tetraRuneMesh.visible = false;
+scene.add(tetraRuneMesh);
+// Draw the texture once the rune font is actually loaded — use `finally`
+// so we still create the texture (with whatever fallback the browser picks)
+// if the font load rejects.
+let tetraRuneReady = false;
+const buildRuneTex = () => {
+  tetraRuneUniforms.uTex.value = makeTetraRuneTexture();
+  tetraRuneReady = true;
+};
+if ("fonts" in document) {
+  document.fonts.load('22px "Madeon Runes"').finally(buildRuneTex);
+} else {
+  buildRuneTex();
+}
+
+// ---------------------------------------------------------------------------
 // Particle system — single THREE.Points object, custom shader uses a
 // precomputed star sprite texture. Used both for confetti AND shockwave
 // rings; we just blit positions into the buffer each frame.
@@ -1041,6 +1184,7 @@ function resizeGL() {
   camera.updateProjectionMatrix();
   gridUniforms.uResolution.value.set(cssW, cssH);
   (ptsMat.uniforms.uPixelRatio.value as number) = dpr;
+  tetraRuneMesh.scale.set(cssW, cssH, 1);
 }
 resizeGL();
 window.addEventListener("resize", () => {
@@ -1249,11 +1393,19 @@ function swapShape() {
   shapeSwapDirection = (Math.random() * 8) | 0;
   applyShape(currentShapeIdx);
   // Roll for swarm — most swaps stay single, occasional ones explode into
-  // a grid-distributed dot-array of small clones.
-  if (Math.random() < PROLIFERATE_CHANCE) {
+  // a grid-distributed dot-array of small clones. tetra is excluded so its
+  // screen-filling treatment isn't broken into a tiny dot grid.
+  const isTetraSwap = SHAPES[currentShapeIdx].name === TETRA_SHAPE_NAME;
+  if (!isTetraSwap && Math.random() < PROLIFERATE_CHANCE) {
     spawnProliferation();
   } else {
     proliferateCount = 1;
+  }
+  // Kick off the rapid morph into ▽ pose. Capture the prior orientation
+  // so the slerp animates *from* whatever rotation was on screen.
+  if (isTetraSwap) {
+    tetraMorphFromQuat.copy(heroGroup.quaternion);
+    tetraMorphTimer = TETRA_MORPH_FRAMES;
   }
   // Roll for VHS tape look.
   vhsActive = Math.random() < VHS_CHANCE;
@@ -1599,16 +1751,37 @@ function frame() {
     shapeSwapTimer > 0
       ? 1 + Math.pow(shapeSwapTimer / SHAPE_SWAP_FRAMES, 0.7) * 0.22
       : 1;
-  // On mobile the canvas is narrow, so 0.085 of min-dim reads as tiny and
-  // makes the bass/bounce effects feel weaker than they are. Bump the base
-  // ratio so the silhouette fills more of the screen on phones.
-  const heroBase = IS_MOBILE ? 0.14 : 0.085;
-  const heroSize =
-    Math.min(cssW, cssH) *
-    heroBase *
-    (1 + Math.pow(envBass, 1.5) * 0.35 + bounceScale * 0.5) *
-    pop *
-    swapPop;
+  // tetra gets a static, screen-filling treatment — fixed ▽ orientation,
+  // sized so the triangle silhouette fills ~68% of the screen, with a
+  // gentle audio modulation that never overflows the frame.
+  const isTetra = SHAPES[currentShapeIdx].name === TETRA_SHAPE_NAME;
+  // Show the rune backdrop the moment tetra is swapped in (don't wait for
+  // the morph to lock). Tint with the mode's edge colour and drive the
+  // shader's time uniform for the per-glyph twinkle.
+  tetraRuneMesh.visible = isTetra && tetraRuneReady;
+  if (tetraRuneMesh.visible) {
+    tetraRuneUniforms.uColor.value.set(mode.edgeHex);
+    tetraRuneUniforms.uTime.value = performance.now();
+  }
+  let heroSize: number;
+  if (isTetra) {
+    // Triangle silhouette ratios for a unit tetra viewed face-on:
+    // 1.634 wide × 1.414 tall in heroSize units.
+    const fitW = (cssW * 0.68) / 1.634;
+    const fitH = (cssH * 0.68) / 1.414;
+    const tetraMod =
+      1 + Math.pow(envBass, 1.5) * 0.05 + bounceScale * 0.05;
+    heroSize = Math.min(fitW, fitH) * tetraMod;
+  } else {
+    // On mobile the canvas is narrow, so 0.085 of min-dim reads as tiny
+    // and makes the bass/bounce effects feel weaker than they are. Bump
+    // the base ratio so the silhouette fills more of the screen on phones.
+    const heroBase = IS_MOBILE ? 0.14 : 0.085;
+    const heroAudioMult =
+      1 + Math.pow(envBass, 1.5) * 0.35 + bounceScale * 0.5;
+    heroSize =
+      Math.min(cssW, cssH) * heroBase * heroAudioMult * pop * swapPop;
+  }
 
   if (proliferateCount > 1) {
     // ---- Swarm mode: render every clone via InstancedMesh ----
@@ -1630,10 +1803,27 @@ function frame() {
     // ---- Single mode: hero mesh + edges with bounce + focal ----
     heroGroup.visible = true;
     instancedHero.visible = false;
-    heroGroup.rotation.x = shapeRotX;
-    heroGroup.rotation.y = shapeRotY;
-    heroGroup.position.x = toWorldX(focalX);
-    heroGroup.position.y = toWorldY(focalY + bouncePosY);
+    if (isTetra) {
+      // Slerp from whatever rotation was on screen at swap time into the
+      // ▽ target pose over TETRA_MORPH_FRAMES, then lock.
+      if (tetraMorphTimer > 0) {
+        const t = 1 - tetraMorphTimer / TETRA_MORPH_FRAMES;
+        const e = 1 - Math.pow(1 - t, 3); // ease-out cubic
+        heroGroup.quaternion
+          .copy(tetraMorphFromQuat)
+          .slerp(TETRA_TARGET_QUAT, e);
+        tetraMorphTimer--;
+      } else {
+        heroGroup.quaternion.copy(TETRA_TARGET_QUAT);
+      }
+      heroGroup.position.x = 0;
+      heroGroup.position.y = toWorldY(cssH / 2 + bouncePosY);
+    } else {
+      heroGroup.rotation.x = shapeRotX;
+      heroGroup.rotation.y = shapeRotY;
+      heroGroup.position.x = toWorldX(focalX);
+      heroGroup.position.y = toWorldY(focalY + bouncePosY);
+    }
     heroGroup.scale.setScalar(heroSize);
   }
 
