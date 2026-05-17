@@ -2,7 +2,7 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>polyhedra · studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -24,17 +24,19 @@
       html, body {
         margin: 0;
         padding: 0;
-        height: 100%;
+        height: 100dvh;
         overflow: hidden;
         background: var(--bg);
         font-family: var(--mono);
         color: var(--ink);
+        overscroll-behavior: none;
+        touch-action: manipulation;
       }
       #gl, #hud {
         position: fixed;
         inset: 0;
         width: 100vw;
-        height: 100vh;
+        height: 100dvh;
         display: block;
       }
       #gl {
@@ -107,11 +109,109 @@
         color: var(--ink);
         font-weight: 400;
       }
+
+      /* Splash overlay — shown once per load to introduce the controls.
+         Tapping anywhere dismisses it; the same tap also satisfies the
+         AudioContext autoplay gesture requirement. */
+      .splash {
+        position: fixed;
+        inset: 0;
+        z-index: 5;
+        display: grid;
+        place-items: center;
+        background: rgba(12, 12, 26, 0.86);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        color: var(--ink);
+        padding: 24px;
+        transition: opacity 220ms ease;
+        cursor: pointer;
+      }
+      .splash.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .splash-inner {
+        display: grid;
+        gap: 22px;
+        justify-items: center;
+        max-width: 420px;
+        text-align: center;
+      }
+      .splash-title {
+        font-family: "Bebas Neue", "Anton", "Archivo Black", sans-serif;
+        font-size: 56px;
+        letter-spacing: 0.16em;
+        line-height: 1;
+        color: var(--ink);
+      }
+      .splash-sub {
+        font: 11px/1 var(--mono);
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+      .splash-body {
+        font: 12px/1.7 var(--mono);
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        display: grid;
+        gap: 8px;
+      }
+      .splash-body b {
+        color: var(--ink);
+        font-weight: 400;
+      }
+      .splash-cta {
+        font: 11px/1 var(--mono);
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+        background: transparent;
+        padding: 14px 26px;
+        border-radius: 2px;
+        cursor: pointer;
+      }
+
+      /* Mobile tweaks — larger tap targets, hide PC-only controls/hints,
+         compact panel. */
+      @media (max-width: 767px) {
+        #gl { cursor: default; }
+        .panel {
+          left: 12px;
+          right: 12px;
+          bottom: max(12px, env(safe-area-inset-bottom));
+          min-width: 0;
+          padding: 12px 14px;
+        }
+        .audio-row button {
+          padding: 10px 14px;
+          font-size: 11px;
+          min-height: 40px;
+        }
+        #tabBtn { display: none; }
+        .audio-hint .desktop-only { display: none; }
+        .splash-title { font-size: 44px; }
+        .splash-body { font-size: 11px; }
+      }
     </style>
   </head>
   <body>
     <canvas id="gl"></canvas>
     <canvas id="hud"></canvas>
+    <div id="splash" class="splash">
+      <div class="splash-inner">
+        <div class="splash-sub">audio-reactive polyhedra</div>
+        <div class="splash-title">POLYHEDRA</div>
+        <div class="splash-body">
+          <div><b>MIC</b> — マイクで周囲の音を拾います（スマホ向け）</div>
+          <div><b>TAB AUDIO</b> — 別タブで再生中の BGM に同期します（PC向け）</div>
+          <div>無音時は画面タップで形と配色が切り替わります</div>
+        </div>
+        <button class="splash-cta">tap to enter</button>
+      </div>
+    </div>
     <div class="panel">
       <div class="audio-row">
         <button id="micBtn">mic</button>
@@ -120,7 +220,7 @@
       </div>
       <div class="audio-hint">
         <div><b>mic</b> — スマホはこちらでスピーカーから集音</div>
-        <div><b>tab audio</b> — PCで別タブの BGM を取り込む</div>
+        <div class="desktop-only"><b>tab audio</b> — PCで別タブの BGM を取り込む</div>
       </div>
       <div class="audio-status" id="audioStatus"></div>
     </div>

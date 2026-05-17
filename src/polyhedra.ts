@@ -22,12 +22,18 @@ const hud = hudCanvas.getContext("2d", { alpha: true })!;
 const stopBtn = document.getElementById("stopBtn") as HTMLButtonElement;
 const audioStatus = document.getElementById("audioStatus")!;
 
+// Mobile branch — narrower screens get lower DPR + lighter particle/effect
+// budgets, plus a stronger bounce/sensitivity curve since phone speakers and
+// mic input usually deliver weaker bass than desktop output.
+const IS_MOBILE = window.innerWidth < 768;
+const DPR_CAP = IS_MOBILE ? 1.5 : 2;
+
 let dpr = 1;
 let cssW = 0;
 let cssH = 0;
 
 function resize() {
-  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
   cssW = window.innerWidth;
   cssH = window.innerHeight;
   hudCanvas.width = Math.floor(cssW * dpr);
@@ -53,10 +59,10 @@ const SHAKE_EXP = 1.4;
 const PARTICLE_EXP = 1.5;
 const SHAPE_SPIN_EXP = 1.5;
 
-const KICK_THRESHOLD = 0.15;
-const KICK_RISE = 0.04;
+const KICK_THRESHOLD = IS_MOBILE ? 0.10 : 0.15;
+const KICK_RISE = IS_MOBILE ? 0.025 : 0.04;
 const KICK_COOLDOWN_FRAMES = 8;
-const KICK_IMPULSE = 7.5;
+const KICK_IMPULSE = IS_MOBILE ? 12 : 7.5;
 const KICKS_PER_SHAPE_SWAP = 4;
 const KICKS_PER_INVERT_ROLL = 2;
 const INVERT_FLIP_CHANCE = 0.55;
@@ -73,10 +79,10 @@ const WAVEFORM_H = 36;
 const WAVEFORM_GAP = 14;
 
 const BOUNCE_STIFFNESS = 0.18;
-const BOUNCE_DAMPING = 0.10;
-const BOUNCE_SCALE_DECAY = 0.83;
+const BOUNCE_DAMPING = IS_MOBILE ? 0.08 : 0.10;
+const BOUNCE_SCALE_DECAY = IS_MOBILE ? 0.88 : 0.83;
 
-const MAX_PARTICLES = 800;
+const MAX_PARTICLES = IS_MOBILE ? 500 : 800;
 const MAX_SHOCKWAVE_POINTS = 600;
 
 // Proliferation — on each shape swap there's a chance the single hero
@@ -176,8 +182,11 @@ const BG_MODES: BgPaletteSet[] = [
 // ---------------------------------------------------------------------------
 // State.
 // ---------------------------------------------------------------------------
+// On mobile the HUD text crowds the top edge, so the geometric centre reads
+// as "low". Bias the focal point a touch above centre to fix the perception.
+const FOCAL_Y_BIAS = IS_MOBILE ? 0.42 : 0.5;
 let focalX = cssW / 2;
-let focalY = cssH / 2;
+let focalY = cssH * FOCAL_Y_BIAS;
 let targetFocalX = focalX;
 let targetFocalY = focalY;
 
@@ -909,7 +918,15 @@ document.getElementById("micBtn")!.addEventListener("click", async () => {
     });
     await startAudio("マイクに連動中", async (ctx, pre) => {
       const src = ctx.createMediaStreamSource(stream);
-      src.connect(pre);
+      // Phone mics tend to feed thin/quiet signal; boost the analyser input
+      // so kick detection and the bounce respond visibly.
+      if (IS_MOBILE) {
+        const gain = ctx.createGain();
+        gain.gain.value = 1.8;
+        src.connect(gain).connect(pre);
+      } else {
+        src.connect(pre);
+      }
     });
   } catch (err) {
     const e = err as DOMException;
@@ -1024,9 +1041,22 @@ function triggerDrop() {
   spawnParticles(particleCount, envBass);
   const m = Math.min(cssW, cssH) * 0.18;
   targetFocalX = m + Math.random() * (cssW - 2 * m);
-  targetFocalY = m + Math.random() * (cssH - 2 * m);
+  // On mobile keep the shape in the upper-mid band so it doesn't dive under
+  // the status panel or the HUD text.
+  const yMax = IS_MOBILE ? cssH * 0.65 : cssH - m;
+  targetFocalY = m + Math.random() * (yMax - m);
   dropCount++;
   swapShape();
+}
+
+const splash = document.getElementById("splash");
+if (splash) {
+  // Pointerdown fires before the window listener below — stopPropagation
+  // prevents the dismiss tap from also triggering a shape swap.
+  splash.addEventListener("pointerdown", (e) => {
+    splash.classList.add("hidden");
+    e.stopPropagation();
+  });
 }
 
 window.addEventListener("pointerdown", (e) => {
