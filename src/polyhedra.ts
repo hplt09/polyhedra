@@ -182,9 +182,7 @@ const BG_MODES: BgPaletteSet[] = [
 // ---------------------------------------------------------------------------
 // State.
 // ---------------------------------------------------------------------------
-// On mobile the HUD text crowds the top edge, so the geometric centre reads
-// as "low". Bias the focal point a touch above centre to fix the perception.
-const FOCAL_Y_BIAS = IS_MOBILE ? 0.42 : 0.5;
+const FOCAL_Y_BIAS = 0.5;
 let focalX = cssW / 2;
 let focalY = cssH * FOCAL_Y_BIAS;
 let targetFocalX = focalX;
@@ -1160,9 +1158,18 @@ function drawWaveform(
   hud.lineCap = "round";
   hud.beginPath();
   const N = timeBuf.length;
+  // Auto-gain — iOS Safari often returns a near-flat time-domain buffer for
+  // getUserMedia streams. Scale the trace by the buffer's peak so quiet
+  // signals are visible, capped at 6x to avoid runaway noise amplification.
+  let peak = 1;
+  for (let i = 0; i < N; i += 4) {
+    const a = Math.abs(timeBuf[i] - 128);
+    if (a > peak) peak = a;
+  }
+  const ampScale = Math.min(6, 90 / peak);
   for (let i = 0; i < WAVEFORM_W; i++) {
     const sampleIdx = Math.floor((i / WAVEFORM_W) * N);
-    const v = (timeBuf[sampleIdx] - 128) / 128;
+    const v = ((timeBuf[sampleIdx] - 128) / 128) * ampScale;
     const py = cy + v * (WAVEFORM_H * 0.45);
     if (i === 0) hud.moveTo(x + i, py);
     else hud.lineTo(x + i, py);
