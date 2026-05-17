@@ -1138,19 +1138,12 @@ function drawHUDText() {
 function drawWaveform(
   x: number,
   y: number,
-  baselineColor: string,
+  _baselineColor: string,
   traceColor: string,
 ) {
   if (!analyser) return;
   analyser.getByteTimeDomainData(timeBuf);
   const cy = y + WAVEFORM_H / 2;
-
-  hud.strokeStyle = baselineColor;
-  hud.lineWidth = 0.5;
-  hud.beginPath();
-  hud.moveTo(x, cy);
-  hud.lineTo(x + WAVEFORM_W, cy);
-  hud.stroke();
 
   hud.strokeStyle = traceColor;
   hud.lineWidth = 1.2;
