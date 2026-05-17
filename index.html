@@ -2,18 +2,30 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <meta name="theme-color" content="#0c0c1a" />
-    <meta name="description" content="音に反応して多面体が形と配色を変えるオーディオビジュアライザ。マイクや別タブの BGM に同期して、10 種類の幾何形態が BLACK / WHITE / PINK のモードを循環します。" />
+    <meta
+      name="description"
+      content="音に反応して多面体が形と配色を変えるオーディオビジュアライザ。マイクや別タブの BGM に同期して、10 種類の幾何形態が BLACK / WHITE / PINK のモードを循環します。"
+    />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
     <meta property="og:type" content="website" />
     <meta property="og:title" content="polyhedra · studio" />
-    <meta property="og:description" content="音に反応して多面体が形と配色を変えるオーディオビジュアライザ。" />
+    <meta
+      property="og:description"
+      content="音に反応して多面体が形と配色を変えるオーディオビジュアライザ。"
+    />
     <meta property="og:url" content="https://polyhedra-gold.vercel.app/" />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content="polyhedra · studio" />
-    <meta name="twitter:description" content="音に反応して多面体が形と配色を変えるオーディオビジュアライザ。" />
+    <meta
+      name="twitter:description"
+      content="音に反応して多面体が形と配色を変えるオーディオビジュアライザ。"
+    />
 
     <title>polyhedra · studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -30,10 +42,11 @@
         --accent: #ff3b6b;
         --panel: rgba(245, 245, 250, 0.05);
         --panel-border: rgba(245, 245, 250, 0.12);
-        --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo,
-          Consolas, monospace;
+        --mono:
+          ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
       }
-      html, body {
+      html,
+      body {
         margin: 0;
         padding: 0;
         height: 100dvh;
@@ -44,7 +57,8 @@
         overscroll-behavior: none;
         touch-action: manipulation;
       }
-      #gl, #hud {
+      #gl,
+      #hud {
         position: fixed;
         inset: 0;
         width: 100vw;
@@ -93,7 +107,9 @@
         padding: 6px 10px;
         border-radius: 2px;
         cursor: pointer;
-        transition: border-color 120ms ease, background 120ms ease;
+        transition:
+          border-color 120ms ease,
+          background 120ms ease;
       }
       .audio-row button:hover {
         border-color: var(--accent);
@@ -189,7 +205,9 @@
       /* Mobile tweaks — larger tap targets, hide PC-only controls/hints,
          compact panel. */
       @media (max-width: 767px) {
-        #gl { cursor: default; }
+        #gl {
+          cursor: default;
+        }
         .panel {
           left: 12px;
           right: 12px;
@@ -202,10 +220,18 @@
           font-size: 11px;
           min-height: 40px;
         }
-        #tabBtn { display: none; }
-        .audio-hint .desktop-only { display: none; }
-        .splash-title { font-size: 44px; }
-        .splash-body { font-size: 11px; }
+        #tabBtn {
+          display: none;
+        }
+        .audio-hint .desktop-only {
+          display: none;
+        }
+        .splash-title {
+          font-size: 44px;
+        }
+        .splash-body {
+          font-size: 11px;
+        }
       }
     </style>
   </head>
@@ -218,7 +244,9 @@
         <div class="splash-title">POLYHEDRA</div>
         <div class="splash-body">
           <div><b>MIC</b> — マイクで周囲の音を拾います（スマホ向け）</div>
-          <div><b>TAB AUDIO</b> — 別タブで再生中の BGM に同期します（PC向け）</div>
+          <div>
+            <b>TAB AUDIO</b> — 別タブで再生中の BGM に同期します（PC向け）
+          </div>
           <div>無音時は画面タップで形と配色が切り替わります</div>
         </div>
         <button class="splash-cta">tap to enter</button>
@@ -232,7 +260,9 @@
       </div>
       <div class="audio-hint">
         <div><b>mic</b> — スマホはこちらでスピーカーから集音</div>
-        <div class="desktop-only"><b>tab audio</b> — PCで別タブの BGM を取り込む</div>
+        <div class="desktop-only">
+          <b>tab audio</b> — PCで別タブの BGM を取り込む
+        </div>
       </div>
       <div class="audio-status" id="audioStatus"></div>
     </div>

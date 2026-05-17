@@ -59,7 +59,7 @@ const SHAKE_EXP = 1.4;
 const PARTICLE_EXP = 1.5;
 const SHAPE_SPIN_EXP = 1.5;
 
-const KICK_THRESHOLD = IS_MOBILE ? 0.10 : 0.15;
+const KICK_THRESHOLD = IS_MOBILE ? 0.1 : 0.15;
 const KICK_RISE = IS_MOBILE ? 0.025 : 0.04;
 const KICK_COOLDOWN_FRAMES = 8;
 const KICK_IMPULSE = IS_MOBILE ? 12 : 7.5;
@@ -71,15 +71,17 @@ const SWIPE_FONT = '"Bebas Neue", "Anton", "Archivo Black", sans-serif';
 const VHS_CHANCE = 0.3;
 
 const GRID_SPACING = 38;
-const HUD_FONT = '11px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
-const HUD_FONT_LG = '22px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
+const HUD_FONT =
+  '11px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
+const HUD_FONT_LG =
+  '22px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
 const HUD_MARGIN = 28;
 const WAVEFORM_W = 200;
 const WAVEFORM_H = 36;
 const WAVEFORM_GAP = 14;
 
 const BOUNCE_STIFFNESS = 0.18;
-const BOUNCE_DAMPING = IS_MOBILE ? 0.08 : 0.10;
+const BOUNCE_DAMPING = IS_MOBILE ? 0.08 : 0.1;
 const BOUNCE_SCALE_DECAY = IS_MOBILE ? 0.88 : 0.83;
 
 const MAX_PARTICLES = IS_MOBILE ? 500 : 800;
@@ -92,7 +94,7 @@ const PROLIFERATE_CHANCE = 0.33;
 const PROLIFERATE_GRID_COLS = 10;
 const PROLIFERATE_GRID_ROWS = 6;
 const MAX_HERO_INSTANCES = PROLIFERATE_GRID_COLS * PROLIFERATE_GRID_ROWS;
-const PROLIFERATE_SCALE = 0.30; // uniform scale relative to single hero size
+const PROLIFERATE_SCALE = 0.3; // uniform scale relative to single hero size
 
 // ---------------------------------------------------------------------------
 // Three-mode palette — BLACK · WHITE · PINK. Replaces the old binary invert
@@ -229,18 +231,23 @@ type Shockwave = { age: number; strength: number; rotation: number };
 const shockwaves: Shockwave[] = [];
 
 type Particle = {
-  x: number; y: number;
-  vx: number; vy: number;
-  age: number; life: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  age: number;
+  life: number;
   size: number;
   color: [number, number, number];
 };
 const particles: Particle[] = [];
 
 type HeroInstance = {
-  x: number; y: number;
+  x: number;
+  y: number;
   scale: number;
-  rotOffX: number; rotOffY: number;
+  rotOffX: number;
+  rotOffY: number;
 };
 const heroInstances: HeroInstance[] = [];
 let proliferateCount = 1; // 1 = single hero, > 1 = swarm
@@ -270,24 +277,44 @@ function makePolyhedron(
     if (r > maxNorm) maxNorm = r;
   }
   const verts: [number, number, number][] = rawVerts.map((v) => [
-    v[0] / maxNorm, v[1] / maxNorm, v[2] / maxNorm,
+    v[0] / maxNorm,
+    v[1] / maxNorm,
+    v[2] / maxNorm,
   ]);
   const faces: Face3[] = faceIndices.map((rawIdx) => {
     const idx = [...rawIdx];
-    let cx = 0, cy = 0, cz = 0;
-    for (const i of idx) { cx += verts[i][0]; cy += verts[i][1]; cz += verts[i][2]; }
-    cx /= idx.length; cy /= idx.length; cz /= idx.length;
-    const v0 = verts[idx[0]], v1 = verts[idx[1]], v2 = verts[idx[2]];
-    const ax = v1[0] - v0[0], ay = v1[1] - v0[1], az = v1[2] - v0[2];
-    const bx = v2[0] - v0[0], by = v2[1] - v0[1], bz = v2[2] - v0[2];
+    let cx = 0,
+      cy = 0,
+      cz = 0;
+    for (const i of idx) {
+      cx += verts[i][0];
+      cy += verts[i][1];
+      cz += verts[i][2];
+    }
+    cx /= idx.length;
+    cy /= idx.length;
+    cz /= idx.length;
+    const v0 = verts[idx[0]],
+      v1 = verts[idx[1]],
+      v2 = verts[idx[2]];
+    const ax = v1[0] - v0[0],
+      ay = v1[1] - v0[1],
+      az = v1[2] - v0[2];
+    const bx = v2[0] - v0[0],
+      by = v2[1] - v0[1],
+      bz = v2[2] - v0[2];
     let nx = ay * bz - az * by;
     let ny = az * bx - ax * bz;
     let nz = ax * by - ay * bx;
     const len = Math.hypot(nx, ny, nz) || 1;
-    nx /= len; ny /= len; nz /= len;
+    nx /= len;
+    ny /= len;
+    nz /= len;
     if (nx * cx + ny * cy + nz * cz < 0) {
       idx.reverse();
-      nx = -nx; ny = -ny; nz = -nz;
+      nx = -nx;
+      ny = -ny;
+      nz = -nz;
     }
     return { idx, n: [nx, ny, nz] };
   });
@@ -297,7 +324,10 @@ function makePolyhedron(
 const PHI = (1 + Math.sqrt(5)) / 2;
 
 function ringVerts(
-  n: number, radius: number, y: number, offsetTurns = 0,
+  n: number,
+  radius: number,
+  y: number,
+  offsetTurns = 0,
 ): [number, number, number][] {
   const out: [number, number, number][] = [];
   for (let i = 0; i < n; i++) {
@@ -308,10 +338,15 @@ function ringVerts(
 }
 
 function makeBipyramid(
-  name: string, n: number, height: number, radius = 1,
+  name: string,
+  n: number,
+  height: number,
+  radius = 1,
 ): Polyhedron {
   const verts: [number, number, number][] = [
-    [0, height, 0], [0, -height, 0], ...ringVerts(n, radius, 0),
+    [0, height, 0],
+    [0, -height, 0],
+    ...ringVerts(n, radius, 0),
   ];
   const faces: number[][] = [];
   for (let i = 0; i < n; i++) {
@@ -340,23 +375,30 @@ function makeAntiprism(name: string, n: number, height: number): Polyhedron {
 function makeDodecahedron(): Polyhedron {
   const IP = 1 / PHI;
   const verts: [number, number, number][] = [];
-  for (const sx of [1, -1]) for (const sy of [1, -1]) for (const sz of [1, -1]) {
-    verts.push([sx, sy, sz]);
-  }
-  for (const a of [1, -1]) for (const b of [1, -1]) {
-    verts.push([0, a * PHI, b * IP]);
-    verts.push([a * IP, 0, b * PHI]);
-    verts.push([a * PHI, b * IP, 0]);
-  }
+  for (const sx of [1, -1])
+    for (const sy of [1, -1])
+      for (const sz of [1, -1]) {
+        verts.push([sx, sy, sz]);
+      }
+  for (const a of [1, -1])
+    for (const b of [1, -1]) {
+      verts.push([0, a * PHI, b * IP]);
+      verts.push([a * IP, 0, b * PHI]);
+      verts.push([a * PHI, b * IP, 0]);
+    }
   const faceDirs: [number, number, number][] = [];
-  for (const a of [1, -1]) for (const b of [1, -1]) {
-    faceDirs.push([0, a, b * PHI]);
-    faceDirs.push([a, b * PHI, 0]);
-    faceDirs.push([a * PHI, 0, b]);
-  }
+  for (const a of [1, -1])
+    for (const b of [1, -1]) {
+      faceDirs.push([0, a, b * PHI]);
+      faceDirs.push([a, b * PHI, 0]);
+      faceDirs.push([a * PHI, 0, b]);
+    }
   const faces: number[][] = faceDirs.map((dir) => {
     const top5 = verts
-      .map((v, idx) => ({ idx, d: v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2] }))
+      .map((v, idx) => ({
+        idx,
+        d: v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2],
+      }))
       .sort((a, b) => b.d - a.d)
       .slice(0, 5)
       .map((x) => x.idx);
@@ -368,14 +410,20 @@ function makeDodecahedron(): Polyhedron {
     let uz = 0;
     const dlen2 = dir[0] ** 2 + dir[1] ** 2 + dir[2] ** 2;
     const du = (dir[0] * ux + dir[1] * uy + dir[2] * uz) / dlen2;
-    ux -= dir[0] * du; uy -= dir[1] * du; uz -= dir[2] * du;
+    ux -= dir[0] * du;
+    uy -= dir[1] * du;
+    uz -= dir[2] * du;
     const ul = Math.hypot(ux, uy, uz);
-    ux /= ul; uy /= ul; uz /= ul;
+    ux /= ul;
+    uy /= ul;
+    uz /= ul;
     let vx = dir[1] * uz - dir[2] * uy;
     let vy = dir[2] * ux - dir[0] * uz;
     let vz = dir[0] * uy - dir[1] * ux;
     const vl = Math.hypot(vx, vy, vz);
-    vx /= vl; vy /= vl; vz /= vl;
+    vx /= vl;
+    vy /= vl;
+    vz /= vl;
     return top5
       .map((i) => {
         const dx = verts[i][0] - cx;
@@ -383,7 +431,10 @@ function makeDodecahedron(): Polyhedron {
         const dz = verts[i][2] - cz;
         return {
           idx: i,
-          angle: Math.atan2(dx * vx + dy * vy + dz * vz, dx * ux + dy * uy + dz * uz),
+          angle: Math.atan2(
+            dx * vx + dy * vy + dz * vz,
+            dx * ux + dy * uy + dz * uz,
+          ),
         };
       })
       .sort((a, b) => a.angle - b.angle)
@@ -393,38 +444,161 @@ function makeDodecahedron(): Polyhedron {
 }
 
 const SHAPES: Polyhedron[] = [
-  makePolyhedron("cube",
-    [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]],
-    [[0,1,2,3],[5,4,7,6],[0,4,5,1],[3,2,6,7],[4,0,3,7],[1,5,6,2]],
+  makePolyhedron(
+    "cube",
+    [
+      [-1, -1, -1],
+      [1, -1, -1],
+      [1, 1, -1],
+      [-1, 1, -1],
+      [-1, -1, 1],
+      [1, -1, 1],
+      [1, 1, 1],
+      [-1, 1, 1],
+    ],
+    [
+      [0, 1, 2, 3],
+      [5, 4, 7, 6],
+      [0, 4, 5, 1],
+      [3, 2, 6, 7],
+      [4, 0, 3, 7],
+      [1, 5, 6, 2],
+    ],
   ),
   makeBipyramid("spike·3", 3, 1.45, 1),
-  makePolyhedron("tetra",
-    [[1,1,1],[1,-1,-1],[-1,1,-1],[-1,-1,1]],
-    [[0,1,3],[0,2,1],[0,3,2],[1,2,3]],
+  makePolyhedron(
+    "tetra",
+    [
+      [1, 1, 1],
+      [1, -1, -1],
+      [-1, 1, -1],
+      [-1, -1, 1],
+    ],
+    [
+      [0, 1, 3],
+      [0, 2, 1],
+      [0, 3, 2],
+      [1, 2, 3],
+    ],
   ),
   makeBipyramid("crystal·6", 6, 1.5, 1),
-  makePolyhedron("cubocta",
-    [[0,1,1],[0,1,-1],[0,-1,1],[0,-1,-1],[1,0,1],[1,0,-1],[-1,0,1],[-1,0,-1],
-     [1,1,0],[1,-1,0],[-1,1,0],[-1,-1,0]],
-    [[8,4,9,5],[10,6,11,7],[8,0,10,1],[9,2,11,3],[4,0,6,2],[5,1,7,3],
-     [8,0,4],[8,1,5],[9,4,2],[9,5,3],[10,0,6],[10,1,7],[11,6,2],[11,7,3]],
+  makePolyhedron(
+    "cubocta",
+    [
+      [0, 1, 1],
+      [0, 1, -1],
+      [0, -1, 1],
+      [0, -1, -1],
+      [1, 0, 1],
+      [1, 0, -1],
+      [-1, 0, 1],
+      [-1, 0, -1],
+      [1, 1, 0],
+      [1, -1, 0],
+      [-1, 1, 0],
+      [-1, -1, 0],
+    ],
+    [
+      [8, 4, 9, 5],
+      [10, 6, 11, 7],
+      [8, 0, 10, 1],
+      [9, 2, 11, 3],
+      [4, 0, 6, 2],
+      [5, 1, 7, 3],
+      [8, 0, 4],
+      [8, 1, 5],
+      [9, 4, 2],
+      [9, 5, 3],
+      [10, 0, 6],
+      [10, 1, 7],
+      [11, 6, 2],
+      [11, 7, 3],
+    ],
   ),
-  makePolyhedron("stella",
-    [[1,1,1],[1,-1,-1],[-1,1,-1],[-1,-1,1],[-1,-1,-1],[-1,1,1],[1,-1,1],[1,1,-1]],
-    [[0,1,3],[0,2,1],[0,3,2],[1,2,3],[4,5,6],[4,6,7],[4,7,5],[5,7,6]],
+  makePolyhedron(
+    "stella",
+    [
+      [1, 1, 1],
+      [1, -1, -1],
+      [-1, 1, -1],
+      [-1, -1, 1],
+      [-1, -1, -1],
+      [-1, 1, 1],
+      [1, -1, 1],
+      [1, 1, -1],
+    ],
+    [
+      [0, 1, 3],
+      [0, 2, 1],
+      [0, 3, 2],
+      [1, 2, 3],
+      [4, 5, 6],
+      [4, 6, 7],
+      [4, 7, 5],
+      [5, 7, 6],
+    ],
   ),
   makeAntiprism("antiprism·5", 5, 0.6),
-  makePolyhedron("icosa",
-    [[0,1,PHI],[0,-1,PHI],[0,1,-PHI],[0,-1,-PHI],[1,PHI,0],[-1,PHI,0],
-     [1,-PHI,0],[-1,-PHI,0],[PHI,0,1],[-PHI,0,1],[PHI,0,-1],[-PHI,0,-1]],
-    [[0,1,8],[0,8,4],[0,4,5],[0,5,9],[0,9,1],[1,9,7],[1,7,6],[1,6,8],[8,6,10],
-     [8,10,4],[4,10,2],[4,2,5],[5,2,11],[5,11,9],[9,11,7],[7,11,3],[7,3,6],
-     [6,3,10],[10,3,2],[11,2,3]],
+  makePolyhedron(
+    "icosa",
+    [
+      [0, 1, PHI],
+      [0, -1, PHI],
+      [0, 1, -PHI],
+      [0, -1, -PHI],
+      [1, PHI, 0],
+      [-1, PHI, 0],
+      [1, -PHI, 0],
+      [-1, -PHI, 0],
+      [PHI, 0, 1],
+      [-PHI, 0, 1],
+      [PHI, 0, -1],
+      [-PHI, 0, -1],
+    ],
+    [
+      [0, 1, 8],
+      [0, 8, 4],
+      [0, 4, 5],
+      [0, 5, 9],
+      [0, 9, 1],
+      [1, 9, 7],
+      [1, 7, 6],
+      [1, 6, 8],
+      [8, 6, 10],
+      [8, 10, 4],
+      [4, 10, 2],
+      [4, 2, 5],
+      [5, 2, 11],
+      [5, 11, 9],
+      [9, 11, 7],
+      [7, 11, 3],
+      [7, 3, 6],
+      [6, 3, 10],
+      [10, 3, 2],
+      [11, 2, 3],
+    ],
   ),
   makeDodecahedron(),
-  makePolyhedron("octa",
-    [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],
-    [[0,2,4],[0,4,3],[0,3,5],[0,5,2],[1,4,2],[1,3,4],[1,5,3],[1,2,5]],
+  makePolyhedron(
+    "octa",
+    [
+      [1, 0, 0],
+      [-1, 0, 0],
+      [0, 1, 0],
+      [0, -1, 0],
+      [0, 0, 1],
+      [0, 0, -1],
+    ],
+    [
+      [0, 2, 4],
+      [0, 4, 3],
+      [0, 3, 5],
+      [0, 5, 2],
+      [1, 4, 2],
+      [1, 3, 4],
+      [1, 5, 3],
+      [1, 2, 5],
+    ],
   ),
 ];
 
@@ -449,13 +623,20 @@ renderer.toneMappingExposure = 0.85;
 
 const scene = new THREE.Scene();
 const initBg = BG_MODES[0].bg;
-scene.background = new THREE.Color(initBg.r / 255, initBg.g / 255, initBg.b / 255);
+scene.background = new THREE.Color(
+  initBg.r / 255,
+  initBg.g / 255,
+  initBg.b / 255,
+);
 
 // Ortho: world origin at screen centre, y up, units = CSS pixels.
 const camera = new THREE.OrthographicCamera(
-  -cssW / 2, cssW / 2,
-   cssH / 2, -cssH / 2,
-  -2000, 2000,
+  -cssW / 2,
+  cssW / 2,
+  cssH / 2,
+  -cssH / 2,
+  -2000,
+  2000,
 );
 camera.position.z = 200;
 
@@ -488,7 +669,8 @@ const edgeMat = new THREE.LineBasicMaterial({
 });
 
 function buildGeometry(poly: Polyhedron): {
-  faces: THREE.BufferGeometry; edges: THREE.BufferGeometry;
+  faces: THREE.BufferGeometry;
+  edges: THREE.BufferGeometry;
 } {
   const positions: number[] = [];
   const normals: number[] = [];
@@ -502,7 +684,10 @@ function buildGeometry(poly: Polyhedron): {
     }
   }
   const faces = new THREE.BufferGeometry();
-  faces.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  faces.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
   faces.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
   // Wireframe edges: dedupe edges across faces.
   const edgeSet = new Set<string>();
@@ -736,7 +921,7 @@ const composer = new EffectComposer(renderer, hdrTarget);
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(cssW, cssH),
-  0.4,  // strength (per-mode override happens each frame)
+  0.4, // strength (per-mode override happens each frame)
   0.32, // radius — tighter so bright clusters don't spread across the frame
   0.55, // threshold (per-mode override)
 );
@@ -750,11 +935,11 @@ composer.addPass(bloomPass);
 // ---------------------------------------------------------------------------
 const chromaticVignettePass = new ShaderPass({
   uniforms: {
-    tDiffuse:    { value: null },
-    uChroma:     { value: 0 },
-    uVignette:   { value: 0.65 },
-    uVhs:        { value: 0 },     // 0..1 — VHS tape look intensity
-    uTime:       { value: 0 },     // ms, for scanline/grain animation
+    tDiffuse: { value: null },
+    uChroma: { value: 0 },
+    uVignette: { value: 0.65 },
+    uVhs: { value: 0 }, // 0..1 — VHS tape look intensity
+    uTime: { value: 0 }, // ms, for scanline/grain animation
     uResolution: { value: new THREE.Vector2(cssW, cssH) },
   },
   vertexShader: /* glsl */ `
@@ -852,13 +1037,20 @@ function resizeGL() {
   (ptsMat.uniforms.uPixelRatio.value as number) = dpr;
 }
 resizeGL();
-window.addEventListener("resize", () => { resize(); resizeGL(); });
+window.addEventListener("resize", () => {
+  resize();
+  resizeGL();
+});
 
 // ---------------------------------------------------------------------------
 // Helpers: canvas (top-left origin) → world (centre origin, y up).
 // ---------------------------------------------------------------------------
-function toWorldX(cx: number) { return cx - cssW / 2; }
-function toWorldY(cy: number) { return cssH / 2 - cy; }
+function toWorldX(cx: number) {
+  return cx - cssW / 2;
+}
+function toWorldY(cy: number) {
+  return cssH / 2 - cy;
+}
 
 // Parse "#rrggbb" → [r, g, b] in [0,1].
 function hexToRgb01(hex: string): [number, number, number] {
@@ -913,7 +1105,12 @@ async function stopAudio() {
     for (const t of activeStream.getTracks()) t.stop();
     activeStream = null;
   }
-  if (audioCtx) { try { await audioCtx.close(); } catch {} audioCtx = null; }
+  if (audioCtx) {
+    try {
+      await audioCtx.close();
+    } catch {}
+    audioCtx = null;
+  }
   analyser = null;
   envBass = envMid = envHi = 0;
   stopBtn.hidden = true;
@@ -948,8 +1145,14 @@ document.getElementById("tabBtn")!.addEventListener("click", async () => {
   try {
     // Keep focus on this tab even when the user picks another tab to share.
     // Chrome 105+ only; other browsers silently ignore the option.
-    type FocusController = { setFocusBehavior?: (b: "no-focus-change" | "focus-captured-surface") => void };
-    const CC = (window as unknown as { CaptureController?: new () => FocusController }).CaptureController;
+    type FocusController = {
+      setFocusBehavior?: (
+        b: "no-focus-change" | "focus-captured-surface",
+      ) => void;
+    };
+    const CC = (
+      window as unknown as { CaptureController?: new () => FocusController }
+    ).CaptureController;
     const controller = CC ? new CC() : undefined;
     controller?.setFocusBehavior?.("no-focus-change");
     const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -977,16 +1180,32 @@ document.getElementById("tabBtn")!.addEventListener("click", async () => {
   }
 });
 
-stopBtn.addEventListener("click", () => { void stopAudio(); });
+stopBtn.addEventListener("click", () => {
+  void stopAudio();
+});
 
 function readAudio() {
   if (!analyser || !audioActive) return;
   analyser.getByteFrequencyData(freqBuf);
   const N = freqBuf.length;
-  let bSum = 0, mSum = 0, hSum = 0, bN = 0, mN = 0, hN = 0;
-  for (let i = 1; i < 6 && i < N; i++) { bSum += freqBuf[i]; bN++; }
-  for (let i = 6; i < 50 && i < N; i++) { mSum += freqBuf[i]; mN++; }
-  for (let i = 50; i < 200 && i < N; i++) { hSum += freqBuf[i]; hN++; }
+  let bSum = 0,
+    mSum = 0,
+    hSum = 0,
+    bN = 0,
+    mN = 0,
+    hN = 0;
+  for (let i = 1; i < 6 && i < N; i++) {
+    bSum += freqBuf[i];
+    bN++;
+  }
+  for (let i = 6; i < 50 && i < N; i++) {
+    mSum += freqBuf[i];
+    mN++;
+  }
+  for (let i = 50; i < 200 && i < N; i++) {
+    hSum += freqBuf[i];
+    hN++;
+  }
   const bass = bN ? bSum / bN / 255 : 0;
   const mid = mN ? mSum / mN / 255 : 0;
   const hi = hN ? hSum / hN / 255 : 0;
@@ -1011,7 +1230,7 @@ function spawnParticles(n: number, energy: number) {
       vy: Math.sin(a) * speed - Math.random() * 3,
       age: 0,
       life: 80 + Math.random() * 70,
-      size: (6 + Math.random() * 14),
+      size: 6 + Math.random() * 14,
       color: palette[(Math.random() * palette.length) | 0],
     });
   }
@@ -1243,7 +1462,7 @@ function drawShapeSwipe() {
   const REF = 100;
   hud.font = `${REF}px ${SWIPE_FONT}`;
   const refWidth = hud.measureText(name).width || 1;
-  const fitWidth = (cssW * 0.95) / refWidth * REF;
+  const fitWidth = ((cssW * 0.95) / refWidth) * REF;
   const fitHeight = cssH * 0.85;
   const fontSize = Math.min(fitWidth, fitHeight) | 0;
   hud.font = `${fontSize}px ${SWIPE_FONT}`;
@@ -1273,24 +1492,36 @@ function frame() {
   // Onset detection.
   if (audioActive) {
     bassPeak = Math.max(envBass * 1.02, bassPeak * 0.985 + envBass * 0.015);
-    midPeak  = Math.max(envMid  * 1.02, midPeak  * 0.97  + envMid  * 0.03);
-    if (dropTimer === 0 && envBass > DROP_THRESHOLD &&
-        envBass / Math.max(0.15, bassPeak) > DROP_OVERSHOOT) {
+    midPeak = Math.max(envMid * 1.02, midPeak * 0.97 + envMid * 0.03);
+    if (
+      dropTimer === 0 &&
+      envBass > DROP_THRESHOLD &&
+      envBass / Math.max(0.15, bassPeak) > DROP_OVERSHOOT
+    ) {
       triggerDrop();
     }
-    if (flashTimer === 0 && envMid > SNARE_THRESHOLD &&
-        envMid / Math.max(0.12, midPeak) > SNARE_OVERSHOOT) {
+    if (
+      flashTimer === 0 &&
+      envMid > SNARE_THRESHOLD &&
+      envMid / Math.max(0.12, midPeak) > SNARE_OVERSHOOT
+    ) {
       flashTimer = FLASH_FRAMES;
       flashIntensity = envMid;
     }
     const bassRise = envBass - prevEnvBass;
     prevEnvBass = envBass;
-    if (kickCooldown === 0 && envBass > KICK_THRESHOLD && bassRise > KICK_RISE) {
+    if (
+      kickCooldown === 0 &&
+      envBass > KICK_THRESHOLD &&
+      bassRise > KICK_RISE
+    ) {
       kickCooldown = KICK_COOLDOWN_FRAMES;
       kickCount++;
       if (kickCount % KICKS_PER_SHAPE_SWAP === 0) swapShape();
-      if (kickCount % KICKS_PER_INVERT_ROLL === 0 &&
-          Math.random() < INVERT_FLIP_CHANCE) {
+      if (
+        kickCount % KICKS_PER_INVERT_ROLL === 0 &&
+        Math.random() < INVERT_FLIP_CHANCE
+      ) {
         // Cycle to a different bg mode (never repeat the current).
         const others = [0, 1, 2].filter((m) => m !== currentBgIdx);
         currentBgIdx = others[(Math.random() * others.length) | 0];
@@ -1305,7 +1536,8 @@ function frame() {
       if (kickTimes.length > 8) kickTimes.shift();
       if (kickTimes.length >= 4) {
         let total = 0;
-        for (let i = 1; i < kickTimes.length; i++) total += kickTimes[i] - kickTimes[i - 1];
+        for (let i = 1; i < kickTimes.length; i++)
+          total += kickTimes[i] - kickTimes[i - 1];
         bpm = Math.round(60000 / (total / (kickTimes.length - 1)));
       }
     }
@@ -1357,16 +1589,20 @@ function frame() {
   const pop = dropTimer > 0 ? 1 + (dropTimer / DROP_FRAMES) * 0.45 : 1;
   // swapPop kept modest so the cube growth doesn't spike bloom contribution
   // (which was responsible for a brief white-out on swap moments).
-  const swapPop = shapeSwapTimer > 0
-    ? 1 + Math.pow(shapeSwapTimer / SHAPE_SWAP_FRAMES, 0.7) * 0.22
-    : 1;
+  const swapPop =
+    shapeSwapTimer > 0
+      ? 1 + Math.pow(shapeSwapTimer / SHAPE_SWAP_FRAMES, 0.7) * 0.22
+      : 1;
   // On mobile the canvas is narrow, so 0.085 of min-dim reads as tiny and
   // makes the bass/bounce effects feel weaker than they are. Bump the base
   // ratio so the silhouette fills more of the screen on phones.
   const heroBase = IS_MOBILE ? 0.14 : 0.085;
-  const heroSize = Math.min(cssW, cssH) * heroBase *
+  const heroSize =
+    Math.min(cssW, cssH) *
+    heroBase *
     (1 + Math.pow(envBass, 1.5) * 0.35 + bounceScale * 0.5) *
-    pop * swapPop;
+    pop *
+    swapPop;
 
   if (proliferateCount > 1) {
     // ---- Swarm mode: render every clone via InstancedMesh ----
@@ -1375,11 +1611,7 @@ function frame() {
     instancedHero.count = proliferateCount;
     for (let i = 0; i < proliferateCount; i++) {
       const inst = heroInstances[i];
-      _instEuler.set(
-        shapeRotX + inst.rotOffX,
-        shapeRotY + inst.rotOffY,
-        0,
-      );
+      _instEuler.set(shapeRotX + inst.rotOffX, shapeRotY + inst.rotOffY, 0);
       _instQuat.setFromEuler(_instEuler);
       _instPos.set(toWorldX(inst.x), toWorldY(inst.y), 0);
       const s = heroSize * inst.scale;
@@ -1404,7 +1636,10 @@ function frame() {
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.age++;
-    if (p.age >= p.life) { particles.splice(i, 1); continue; }
+    if (p.age >= p.life) {
+      particles.splice(i, 1);
+      continue;
+    }
     p.x += p.vx;
     p.y += p.vy;
     p.vy += 0.1;
@@ -1414,10 +1649,10 @@ function frame() {
     const alpha = 1 - lifeT;
     const size = p.size * (1 - lifeT * 0.3);
     const o3 = pCount * 3;
-    ptsPositions[o3]     = toWorldX(p.x);
+    ptsPositions[o3] = toWorldX(p.x);
     ptsPositions[o3 + 1] = toWorldY(p.y);
     ptsPositions[o3 + 2] = 20;
-    ptsColors[o3]     = p.color[0] * alpha;
+    ptsColors[o3] = p.color[0] * alpha;
     ptsColors[o3 + 1] = p.color[1] * alpha;
     ptsColors[o3 + 2] = p.color[2] * alpha;
     ptsSizes[pCount] = size;
@@ -1439,7 +1674,10 @@ function frame() {
     const sw = shockwaves[i];
     sw.age++;
     const lifetime = 75;
-    if (sw.age >= lifetime) { shockwaves.splice(i, 1); continue; }
+    if (sw.age >= lifetime) {
+      shockwaves.splice(i, 1);
+      continue;
+    }
     const t = sw.age / lifetime;
     const ease = 1 - Math.pow(1 - t, 2.4);
     const radius = 70 + outerR * 0.6 * ease;
@@ -1453,10 +1691,10 @@ function frame() {
       const x = focalX + Math.cos(a) * radius;
       const y = focalY + Math.sin(a) * radius;
       const o3 = swPointCount * 3;
-      swPositions[o3]     = toWorldX(x);
+      swPositions[o3] = toWorldX(x);
       swPositions[o3 + 1] = toWorldY(y);
       swPositions[o3 + 2] = 10;
-      swColors[o3]     = swColor[0] * alpha;
+      swColors[o3] = swColor[0] * alpha;
       swColors[o3 + 1] = swColor[1] * alpha;
       swColors[o3 + 2] = swColor[2] * alpha;
       swSizes[swPointCount] = baseSize;
