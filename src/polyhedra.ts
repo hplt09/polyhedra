@@ -228,6 +228,16 @@ let bounceScale = 0;
 const kickTimes: number[] = [];
 let bpm = 0;
 
+// Tap-tempo state. Pressing the panel button (or spacebar) collects taps in
+// a 2.5s window; ≥3 taps locks `lockedBpm`, which then drives shape swaps on
+// a beat grid instead of the kick counter.
+const TAP_WINDOW_MS = 2500;
+const TAP_GRID_BEATS = 8;
+const tapTimes: number[] = [];
+let lockedBpm = 0;
+let lockedBeatPhase = 0; // performance.now() at beat #0
+let lockedBeatLastFired = -1; // last beat number that triggered a swap
+
 let dropCount = 0;
 // Cycles 0→2 (BLACK · WHITE · PINK) on the same cadence the old invert flag
 // used to toggle. Audio resets it to 0; manual clicks (no audio) advance it.
@@ -1334,6 +1344,44 @@ stopBtn.addEventListener("click", () => {
   void stopAudio();
 });
 
+const tapBpmEl = document.getElementById("tapBpm")!;
+function handleTap() {
+  const now = performance.now();
+  // Reset the tap history if the gap since the last tap exceeded the window.
+  if (
+    tapTimes.length > 0 &&
+    now - tapTimes[tapTimes.length - 1] > TAP_WINDOW_MS
+  ) {
+    tapTimes.length = 0;
+  }
+  tapTimes.push(now);
+  if (tapTimes.length > 8) tapTimes.shift();
+  if (tapTimes.length >= 3) {
+    let sum = 0;
+    for (let i = 1; i < tapTimes.length; i++) {
+      sum += tapTimes[i] - tapTimes[i - 1];
+    }
+    const candidate = 60000 / (sum / (tapTimes.length - 1));
+    if (candidate >= 40 && candidate <= 220) {
+      lockedBpm = Math.round(candidate);
+      lockedBeatPhase = tapTimes[tapTimes.length - 1];
+      lockedBeatLastFired = -1;
+    }
+  }
+  tapBpmEl.textContent =
+    lockedBpm > 0 ? `${lockedBpm} BPM` : `${tapTimes.length}/3`;
+  tapBpmEl.classList.toggle("locked", lockedBpm > 0);
+}
+document.getElementById("tapBtn")!.addEventListener("click", handleTap);
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space") return;
+  const tag = (e.target as HTMLElement | null)?.tagName;
+  // Skip when a button/input is focused — those already handle space natively.
+  if (tag === "BUTTON" || tag === "INPUT") return;
+  handleTap();
+  e.preventDefault();
+});
+
 function readAudio() {
   if (!analyser || !audioActive) return;
   analyser.getByteFrequencyData(freqBuf);
@@ -1435,13 +1483,74 @@ function triggerDrop() {
   swapShape();
 }
 
+// ---------------------------------------------------------------------------
+// Device-motion shake detection — on mobile, shaking the phone fires a
+// drop-like event (palette cycle + shape swap + shockwave + camera shake).
+// iOS 13+ requires explicit permission via DeviceMotionEvent.requestPermission;
+// other platforms bind the listener directly.
+// ---------------------------------------------------------------------------
+const SHAKE_DELTA_THRESHOLD = 9; // m/s² spike vs. previous sample
+const SHAKE_COOLDOWN_MS = 400;
+let lastAccelMag = 9.8;
+let lastShakeMs = 0;
+function onDeviceMotion(e: DeviceMotionEvent) {
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null || a.y == null || a.z == null) return;
+  const mag = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+  const delta = Math.abs(mag - lastAccelMag);
+  lastAccelMag = mag;
+  const now = performance.now();
+  if (delta > SHAKE_DELTA_THRESHOLD && now - lastShakeMs > SHAKE_COOLDOWN_MS) {
+    lastShakeMs = now;
+    onShake();
+  }
+}
+function onShake() {
+  // Big satisfying response — drop-like motion, palette cycle, shape swap.
+  dropTimer = DROP_FRAMES;
+  shockwaves.push({
+    age: 0,
+    strength: 0.75,
+    rotation: Math.random() * Math.PI * 2,
+  });
+  shakeTimer = SHAKE_FRAMES;
+  shakeStrength = 26;
+  spawnParticles(65, 0.75);
+  const m = Math.min(cssW, cssH) * 0.18;
+  targetFocalX = m + Math.random() * (cssW - 2 * m);
+  const yMax = IS_MOBILE ? cssH * 0.65 : cssH - m;
+  targetFocalY = m + Math.random() * (yMax - m);
+  dropCount++;
+  bounceVelY -= 0.7 * KICK_IMPULSE;
+  // Cycle to a different palette so a shake reads as a section change.
+  const others = [0, 1, 2].filter((mi) => mi !== currentBgIdx);
+  currentBgIdx = others[(Math.random() * others.length) | 0];
+  swapShape();
+}
+async function initDeviceMotion() {
+  const motionAny = DeviceMotionEvent as unknown as {
+    requestPermission?: () => Promise<"granted" | "denied">;
+  };
+  if (typeof motionAny.requestPermission === "function") {
+    try {
+      const state = await motionAny.requestPermission();
+      if (state !== "granted") return;
+    } catch {
+      return;
+    }
+  }
+  window.addEventListener("devicemotion", onDeviceMotion);
+}
+
 const splash = document.getElementById("splash");
 if (splash) {
   // Pointerdown fires before the window listener below — stopPropagation
-  // prevents the dismiss tap from also triggering a shape swap.
+  // prevents the dismiss tap from also triggering a shape swap. Also use
+  // this first user gesture to request motion permission on iOS.
   splash.addEventListener("pointerdown", (e) => {
     splash.classList.add("hidden");
     e.stopPropagation();
+    void initDeviceMotion();
   });
 }
 
@@ -1509,9 +1618,16 @@ function drawHUDText() {
     cssW - HUD_MARGIN,
     readoutY,
   );
-  if (audioActive && bpm > 0) {
+  // Prefer the tap-locked BPM when set; fall back to auto-detected.
+  const displayBpm = lockedBpm > 0 ? lockedBpm : audioActive ? bpm : 0;
+  if (displayBpm > 0) {
     hud.fillStyle = accentColor;
-    hud.fillText(`~${bpm} BPM`, cssW - HUD_MARGIN, readoutY + 16);
+    const prefix = lockedBpm > 0 ? "TAP" : "~";
+    hud.fillText(
+      `${prefix}${lockedBpm > 0 ? " " : ""}${displayBpm} BPM`,
+      cssW - HUD_MARGIN,
+      readoutY + 16,
+    );
   }
   if (audioActive) {
     hud.fillStyle = textColor;
@@ -1643,6 +1759,18 @@ function drawSnareFlash() {
 function frame() {
   readAudio();
 
+  // Tap-tempo beat grid — when a BPM is locked, fire a shape swap every
+  // TAP_GRID_BEATS beats. Runs independently of audio so the visual stays
+  // on-grid even without an input source.
+  if (lockedBpm > 0) {
+    const beatDur = 60000 / lockedBpm;
+    const beatNum = Math.floor((performance.now() - lockedBeatPhase) / beatDur);
+    if (beatNum > lockedBeatLastFired) {
+      lockedBeatLastFired = beatNum;
+      if (beatNum > 0 && beatNum % TAP_GRID_BEATS === 0) swapShape();
+    }
+  }
+
   // Focal glide.
   focalX += (targetFocalX - focalX) * 0.13;
   focalY += (targetFocalY - focalY) * 0.13;
@@ -1675,7 +1803,10 @@ function frame() {
     ) {
       kickCooldown = KICK_COOLDOWN_FRAMES;
       kickCount++;
-      if (kickCount % KICKS_PER_SHAPE_SWAP === 0) swapShape();
+      // When tap-locked, the beat grid drives shape swaps instead of kicks.
+      if (lockedBpm === 0 && kickCount % KICKS_PER_SHAPE_SWAP === 0) {
+        swapShape();
+      }
       if (
         kickCount % KICKS_PER_INVERT_ROLL === 0 &&
         Math.random() < INVERT_FLIP_CHANCE
