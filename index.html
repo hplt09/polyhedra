@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>polyhedra · studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0c0c1a;
+        --ink: #f5f5fa;
+        --muted: rgba(245, 245, 250, 0.45);
+        --accent: #ff3b6b;
+        --panel: rgba(245, 245, 250, 0.05);
+        --panel-border: rgba(245, 245, 250, 0.12);
+        --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo,
+          Consolas, monospace;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        font-family: var(--mono);
+        color: var(--ink);
+      }
+      #gl, #hud {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        display: block;
+      }
+      #gl {
+        z-index: 0;
+        cursor: crosshair;
+      }
+      #hud {
+        z-index: 1;
+        pointer-events: none;
+      }
+      .panel {
+        position: fixed;
+        bottom: 14px;
+        right: 16px;
+        background: var(--panel);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid var(--panel-border);
+        border-radius: 2px;
+        padding: 10px 12px;
+        font: 10px/1.4 var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+        z-index: 2;
+        display: grid;
+        gap: 8px;
+        min-width: 220px;
+      }
+      .audio-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .audio-row button {
+        font: 10px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--ink);
+        background: transparent;
+        border: 1px solid var(--panel-border);
+        padding: 6px 10px;
+        border-radius: 2px;
+        cursor: pointer;
+        transition: border-color 120ms ease, background 120ms ease;
+      }
+      .audio-row button:hover {
+        border-color: var(--accent);
+        background: rgba(255, 59, 107, 0.08);
+      }
+      .audio-row button[hidden] {
+        display: none;
+      }
+      .audio-status {
+        font: 10px/1.2 var(--mono);
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        min-height: 12px;
+        text-transform: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="gl"></canvas>
+    <canvas id="hud"></canvas>
+    <div class="panel">
+      <div class="audio-row">
+        <button id="micBtn">mic</button>
+        <button id="fileBtn">file</button>
+        <input id="fileInput" type="file" accept="audio/*" hidden />
+        <button id="tabBtn">tab audio</button>
+        <button id="stopBtn" hidden>stop</button>
+      </div>
+      <div class="audio-status" id="audioStatus"></div>
+    </div>
+    <script type="module" src="/src/polyhedra.ts"></script>
+  </body>
+</html>
