@@ -70,9 +70,6 @@ const SHAPE_SWAP_FRAMES = 36;
 const SWIPE_FONT = '"Bebas Neue", "Anton", "Archivo Black", sans-serif';
 const VHS_CHANCE = 0.3;
 
-// Per-swap chance the top-left HUD shape name renders in Madeon Runes
-// (rune-glyph variant) instead of the mono fallback.
-const RUNIC_NAME_CHANCE = 0.4;
 const RUNIC_NAME_FONT =
   '24px "Madeon Runes", ui-monospace, "SF Mono", Menlo, monospace';
 
@@ -84,8 +81,6 @@ if ("fonts" in document) {
 const GRID_SPACING = 38;
 const HUD_FONT =
   '11px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
-const HUD_FONT_LG =
-  '22px ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace';
 const HUD_MARGIN = 28;
 const WAVEFORM_W = 200;
 const WAVEFORM_H = 36;
@@ -265,7 +260,6 @@ let proliferateCount = 1; // 1 = single hero, > 1 = swarm
 
 // Per-swap randomised state.
 let vhsActive = false;
-let runicName = false;
 let vhsLevel = 0; // smoothed 0..1 actually applied to shader
 
 // ---------------------------------------------------------------------------
@@ -1263,8 +1257,6 @@ function swapShape() {
   }
   // Roll for VHS tape look.
   vhsActive = Math.random() < VHS_CHANCE;
-  // Roll for runic typography on the top-left HUD shape name.
-  runicName = Math.random() < RUNIC_NAME_CHANCE;
   const strength = audioActive ? Math.max(0.55, envBass) : 0.65;
   bounceVelY -= strength * KICK_IMPULSE;
   bounceScale = Math.max(bounceScale, strength);
@@ -1336,7 +1328,7 @@ function drawHUDText() {
   const total = String(SHAPES.length).padStart(2, "0");
   hud.fillText(`${idx} / ${total}`, HUD_MARGIN, HUD_MARGIN);
 
-  hud.font = runicName ? RUNIC_NAME_FONT : HUD_FONT_LG;
+  hud.font = RUNIC_NAME_FONT;
   hud.fillStyle = accentColor;
   hud.fillText(shape.name.toUpperCase(), HUD_MARGIN, HUD_MARGIN + 18);
 
