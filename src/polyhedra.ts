@@ -291,6 +291,12 @@ const TETRA_TARGET_QUAT = (() => {
   return q2.multiply(q1);
 })();
 const TETRA_SHAPE_NAME = "tetra";
+const STELLA_SHAPE_NAME = "stella";
+const STELLA_CIRCLE_COUNT = 12;
+const STELLA_CIRCLE_SCALE = 0.18;
+const STELLA_MERGE_SCALE = 0.95; // per-instance scale at the convergence frame
+const STELLA_MORPH_FRAMES = 100;
+let stellaMorphTimer = 0;
 const TETRA_MORPH_FRAMES = 100;
 let tetraMorphTimer = 0;
 const tetraMorphFromQuat = new THREE.Quaternion();
@@ -641,6 +647,43 @@ const SHAPES: Polyhedron[] = [
   ),
 ];
 
+// Per-shape rotation profile — each polyhedron gets a distinct spin
+// signature so the silhouette has its own visual identity. Falls back to
+// DEFAULT_SPIN (the original rates) for any name not listed.
+type SpinProfile = {
+  baseX: number;
+  baseY: number;
+  bassMultX: number;
+  midMultY: number;
+};
+const DEFAULT_SPIN: SpinProfile = {
+  baseX: 0.005,
+  baseY: 0.008,
+  bassMultX: 0.07,
+  midMultY: 0.045,
+};
+const SPIN_PROFILES: Record<string, SpinProfile> = {
+  // Sideways high-speed spin — the staggered top/bottom rings smear into a
+  // visible "twist" band.
+  "antiprism·5": {
+    baseX: 0.02,
+    baseY: 0.004,
+    bassMultX: 0.14,
+    midMultY: 0.02,
+  },
+  // Fast Y rotation blurs the silhouette toward a sphere; the form snaps
+  // back when the kick decays.
+  octa: { baseX: 0.002, baseY: 0.045, bassMultX: 0.02, midMultY: 0.11 },
+  // Crystal stand — spin around the spike axis with a tiny rocking drift.
+  "spike·3": { baseX: 0.003, baseY: 0.024, bassMultX: 0.04, midMultY: 0.08 },
+  "crystal·6": { baseX: 0.003, baseY: 0.024, bassMultX: 0.04, midMultY: 0.08 },
+  // Monolith pace — roughly 1/3 of default for a photo-frame stillness.
+  cube: { baseX: 0.0016, baseY: 0.0027, bassMultX: 0.022, midMultY: 0.014 },
+  // Star-mandala — much faster than any other shape so the inward-collapsing
+  // ring and the final big stella both blur into a swirling halo.
+  stella: { baseX: 0.12, baseY: 0.18, bassMultX: 0.4, midMultY: 0.3 },
+};
+
 // ---------------------------------------------------------------------------
 // three.js setup — orthographic camera so canvas-style 2D coords work for
 // particles/shockwaves while the polyhedron rotates in real 3D.
@@ -799,6 +842,27 @@ function spawnProliferation() {
         rotOffY: 0,
       });
     }
+  }
+}
+
+// Stella-specific layout — 12 small stellas placed evenly around the screen
+// centre. Each instance gets a unique rotation offset so the ring reads as
+// a coordinated mandala rather than every star spinning in lockstep.
+function spawnStellaCircle() {
+  proliferateCount = STELLA_CIRCLE_COUNT;
+  heroInstances.length = 0;
+  const cx = cssW / 2;
+  const cy = cssH / 2;
+  const radius = Math.min(cssW, cssH) * 0.32;
+  for (let i = 0; i < STELLA_CIRCLE_COUNT; i++) {
+    const angle = (i / STELLA_CIRCLE_COUNT) * Math.PI * 2 - Math.PI / 2;
+    heroInstances.push({
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+      scale: STELLA_CIRCLE_SCALE,
+      rotOffX: angle * 0.7,
+      rotOffY: angle * 1.3,
+    });
   }
 }
 
@@ -1440,11 +1504,16 @@ function swapShape() {
   // 8 sweep directions — 4 cardinal + 4 diagonal.
   shapeSwapDirection = (Math.random() * 8) | 0;
   applyShape(currentShapeIdx);
-  // Roll for swarm — most swaps stay single, occasional ones explode into
-  // a grid-distributed dot-array of small clones. tetra is excluded so its
-  // screen-filling treatment isn't broken into a tiny dot grid.
-  const isTetraSwap = SHAPES[currentShapeIdx].name === TETRA_SHAPE_NAME;
-  if (!isTetraSwap && Math.random() < PROLIFERATE_CHANCE) {
+  // Layout rolls — stella always shows as a 12-pointed mandala ring; tetra
+  // stays single (it has its own screen-fill treatment); everything else
+  // rolls for the grid-swarm.
+  const swapName = SHAPES[currentShapeIdx].name;
+  const isTetraSwap = swapName === TETRA_SHAPE_NAME;
+  const isStellaSwap = swapName === STELLA_SHAPE_NAME;
+  if (isStellaSwap) {
+    spawnStellaCircle();
+    stellaMorphTimer = STELLA_MORPH_FRAMES;
+  } else if (!isTetraSwap && Math.random() < PROLIFERATE_CHANCE) {
     spawnProliferation();
   } else {
     proliferateCount = 1;
@@ -1782,6 +1851,7 @@ function frame() {
   if (flashTimer > 0) flashTimer--;
   if (shapeSwapTimer > 0) shapeSwapTimer--;
 
+
   // Camera shake (applied to camera position; HUD shake passed separately).
   const shakeT = shakeTimer > 0 ? shakeTimer / SHAKE_FRAMES : 0;
   const sx = shakeT > 0 ? (Math.random() - 0.5) * shakeStrength * shakeT : 0;
@@ -1812,8 +1882,17 @@ function frame() {
   gridUniforms.uTime.value = performance.now();
 
   // Hero rotation + size (shared between single and swarm modes).
-  shapeRotX += 0.005 + Math.pow(envBass, SHAPE_SPIN_EXP) * 0.07;
-  shapeRotY += 0.008 + Math.pow(envMid, SHAPE_SPIN_EXP) * 0.045;
+  const shapeName = SHAPES[currentShapeIdx].name;
+  const isTetra = shapeName === TETRA_SHAPE_NAME;
+  const isStella = shapeName === STELLA_SHAPE_NAME;
+  // Use the per-shape spin profile during the swarm/ring phase, then fall
+  // back to the default once stella has merged into a single big mesh.
+  const spin =
+    isStella && proliferateCount === 1
+      ? DEFAULT_SPIN
+      : (SPIN_PROFILES[shapeName] ?? DEFAULT_SPIN);
+  shapeRotX += spin.baseX + Math.pow(envBass, SHAPE_SPIN_EXP) * spin.bassMultX;
+  shapeRotY += spin.baseY + Math.pow(envMid, SHAPE_SPIN_EXP) * spin.midMultY;
   const pop = dropTimer > 0 ? 1 + (dropTimer / DROP_FRAMES) * 0.45 : 1;
   // swapPop kept modest so the cube growth doesn't spike bloom contribution
   // (which was responsible for a brief white-out on swap moments).
@@ -1824,7 +1903,6 @@ function frame() {
   // tetra gets a static, screen-filling treatment — fixed ▽ orientation,
   // sized so the triangle silhouette fills ~68% of the screen, with a
   // gentle audio modulation that never overflows the frame.
-  const isTetra = SHAPES[currentShapeIdx].name === TETRA_SHAPE_NAME;
   // Show the rune backdrop the moment tetra is swapped in (don't wait for
   // the morph to lock). Tint with the mode's edge colour and drive the
   // shader's time uniform for the per-glyph twinkle.
@@ -1833,6 +1911,33 @@ function frame() {
     tetraRuneUniforms.uColor.value.set(mode.edgeHex);
     tetraRuneUniforms.uTime.value = performance.now();
   }
+
+  // Stella ring → centre morph. Each frame moves the 12 instances inward,
+  // grows their per-instance scale, and decays the rotation offsets so that
+  // they all align at convergence. When the timer hits 0, we flip to
+  // single-mesh mode and a big stella replaces the ring.
+  if (isStella && stellaMorphTimer > 0 && proliferateCount === STELLA_CIRCLE_COUNT) {
+    const t = 1 - stellaMorphTimer / STELLA_MORPH_FRAMES;
+    const eased = t * t * (3 - 2 * t);
+    const cx = cssW / 2;
+    const cy = cssH / 2;
+    const radius = (1 - eased) * Math.min(cssW, cssH) * 0.32;
+    const scale =
+      STELLA_CIRCLE_SCALE + eased * (STELLA_MERGE_SCALE - STELLA_CIRCLE_SCALE);
+    const offSmooth = 1 - eased;
+    for (let i = 0; i < STELLA_CIRCLE_COUNT; i++) {
+      const angle = (i / STELLA_CIRCLE_COUNT) * Math.PI * 2 - Math.PI / 2;
+      const inst = heroInstances[i];
+      inst.x = cx + Math.cos(angle) * radius;
+      inst.y = cy + Math.sin(angle) * radius;
+      inst.scale = scale;
+      inst.rotOffX = angle * 0.7 * offSmooth;
+      inst.rotOffY = angle * 1.3 * offSmooth;
+    }
+    stellaMorphTimer--;
+    if (stellaMorphTimer === 0) proliferateCount = 1;
+  }
+
   let heroSize: number;
   if (isTetra) {
     // Triangle silhouette ratios for a unit tetra viewed face-on:
@@ -1886,6 +1991,12 @@ function frame() {
       } else {
         heroGroup.quaternion.copy(TETRA_TARGET_QUAT);
       }
+      heroGroup.position.x = 0;
+      heroGroup.position.y = toWorldY(cssH / 2 + bouncePosY);
+    } else if (isStella) {
+      // Big final stella stays centred and just keeps spinning.
+      heroGroup.rotation.x = shapeRotX;
+      heroGroup.rotation.y = shapeRotY;
       heroGroup.position.x = 0;
       heroGroup.position.y = toWorldY(cssH / 2 + bouncePosY);
     } else {
