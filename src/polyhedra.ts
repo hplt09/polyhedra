@@ -1166,11 +1166,13 @@ function drawWaveform(
     const a = Math.abs(timeBuf[i] - 128);
     if (a > peak) peak = a;
   }
-  const ampScale = Math.min(6, 90 / peak);
+  const ampScale = Math.min(16, 120 / peak);
+  const maxOffset = WAVEFORM_H * 0.48;
   for (let i = 0; i < WAVEFORM_W; i++) {
     const sampleIdx = Math.floor((i / WAVEFORM_W) * N);
     const v = ((timeBuf[sampleIdx] - 128) / 128) * ampScale;
-    const py = cy + v * (WAVEFORM_H * 0.45);
+    const offset = Math.max(-1, Math.min(1, v)) * maxOffset;
+    const py = cy + offset;
     if (i === 0) hud.moveTo(x + i, py);
     else hud.lineTo(x + i, py);
   }
