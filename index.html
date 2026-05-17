@@ -35,6 +35,25 @@
       rel="stylesheet"
     />
     <style>
+      @font-face {
+        font-family: "Madeon Runes";
+        src: url("/fonts/madeon-runes/MadeonRunes-Regular.otf") format("opentype");
+        font-weight: 400;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: "Madeon Runes";
+        src: url("/fonts/madeon-runes/MadeonRunes-Bold.otf") format("opentype");
+        font-weight: 700;
+        font-display: swap;
+      }
+      @font-face {
+        font-family: "Madeon Runes";
+        src: url("/fonts/madeon-runes/MadeonRunes-Light.otf") format("opentype");
+        font-weight: 300;
+        font-display: swap;
+      }
+
       :root {
         --bg: #0c0c1a;
         --ink: #f5f5fa;
@@ -200,6 +219,22 @@
         padding: 14px 26px;
         border-radius: 2px;
         cursor: pointer;
+      }
+
+      /* Runic variant — 50% chance per load, applied via JS. The Madeon Runes
+         font maps Latin letters to geometric rune glyphs, so the title text
+         turns into symbols while the layout stays the same. */
+      .splash.runic .splash-title {
+        font-family: "Madeon Runes", "Bebas Neue", sans-serif;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+      .splash.runic .splash-sub {
+        font-family: "Madeon Runes", var(--mono);
+        font-weight: 400;
+        font-size: 18px;
+        letter-spacing: 0.18em;
+        text-transform: none;
       }
 
       /* Mobile tweaks — larger tap targets, hide PC-only controls/hints,

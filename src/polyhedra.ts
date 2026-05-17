@@ -1279,6 +1279,10 @@ function triggerDrop() {
 
 const splash = document.getElementById("splash");
 if (splash) {
+  // Coin-flip the splash typography between the default and the Madeon
+  // Runes glyph variant — the rune font maps each Latin letter to a
+  // geometric symbol, so this swaps the title/sub into runic shapes.
+  if (Math.random() < 0.5) splash.classList.add("runic");
   // Pointerdown fires before the window listener below — stopPropagation
   // prevents the dismiss tap from also triggering a shape swap.
   splash.addEventListener("pointerdown", (e) => {
