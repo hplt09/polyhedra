@@ -68,15 +68,18 @@ const KICKS_PER_INVERT_ROLL = 2;
 const INVERT_FLIP_CHANCE = 0.55;
 const SHAPE_SWAP_FRAMES = 36;
 const SWIPE_FONT = '"Bebas Neue", "Anton", "Archivo Black", sans-serif';
-const RUNIC_SWIPE_FONT = '"Madeon Runes", "Bebas Neue", sans-serif';
-const RUNIC_SWIPE_CHANCE = 0.4;
-
-// Warm up the rune font so the first runic swap uses the correct metrics
-// rather than fallback measurements.
-if ("fonts" in document) {
-  document.fonts.load("700 100px 'Madeon Runes'").catch(() => {});
-}
 const VHS_CHANCE = 0.3;
+
+// Per-swap chance the top-left HUD shape name renders in Madeon Runes
+// (rune-glyph variant) instead of the mono fallback.
+const RUNIC_NAME_CHANCE = 0.4;
+const RUNIC_NAME_FONT =
+  '24px "Madeon Runes", ui-monospace, "SF Mono", Menlo, monospace';
+
+// Warm up the rune font so the first runic name uses correct metrics.
+if ("fonts" in document) {
+  document.fonts.load("400 24px 'Madeon Runes'").catch(() => {});
+}
 
 const GRID_SPACING = 38;
 const HUD_FONT =
@@ -262,7 +265,7 @@ let proliferateCount = 1; // 1 = single hero, > 1 = swarm
 
 // Per-swap randomised state.
 let vhsActive = false;
-let swipeRunic = false;
+let runicName = false;
 let vhsLevel = 0; // smoothed 0..1 actually applied to shader
 
 // ---------------------------------------------------------------------------
@@ -1260,9 +1263,8 @@ function swapShape() {
   }
   // Roll for VHS tape look.
   vhsActive = Math.random() < VHS_CHANCE;
-  // Roll for runic typography on the swipe band — when true, the next
-  // shape-name reveal renders in Madeon Runes instead of Bebas Neue.
-  swipeRunic = Math.random() < RUNIC_SWIPE_CHANCE;
+  // Roll for runic typography on the top-left HUD shape name.
+  runicName = Math.random() < RUNIC_NAME_CHANCE;
   const strength = audioActive ? Math.max(0.55, envBass) : 0.65;
   bounceVelY -= strength * KICK_IMPULSE;
   bounceScale = Math.max(bounceScale, strength);
@@ -1291,10 +1293,6 @@ function triggerDrop() {
 
 const splash = document.getElementById("splash");
 if (splash) {
-  // Coin-flip the splash typography between the default and the Madeon
-  // Runes glyph variant — the rune font maps each Latin letter to a
-  // geometric symbol, so this swaps the title/sub into runic shapes.
-  if (Math.random() < 0.5) splash.classList.add("runic");
   // Pointerdown fires before the window listener below — stopPropagation
   // prevents the dismiss tap from also triggering a shape swap.
   splash.addEventListener("pointerdown", (e) => {
@@ -1338,7 +1336,7 @@ function drawHUDText() {
   const total = String(SHAPES.length).padStart(2, "0");
   hud.fillText(`${idx} / ${total}`, HUD_MARGIN, HUD_MARGIN);
 
-  hud.font = HUD_FONT_LG;
+  hud.font = runicName ? RUNIC_NAME_FONT : HUD_FONT_LG;
   hud.fillStyle = accentColor;
   hud.fillText(shape.name.toUpperCase(), HUD_MARGIN, HUD_MARGIN + 18);
 
@@ -1473,16 +1471,15 @@ function drawShapeSwipe() {
   hud.fillRect(0, 0, cssW, cssH);
 
   const name = SHAPES[currentShapeIdx].name.toUpperCase();
-  const swipeFont = swipeRunic ? RUNIC_SWIPE_FONT : SWIPE_FONT;
   hud.textAlign = "center";
   hud.textBaseline = "middle";
   const REF = 100;
-  hud.font = `700 ${REF}px ${swipeFont}`;
+  hud.font = `${REF}px ${SWIPE_FONT}`;
   const refWidth = hud.measureText(name).width || 1;
   const fitWidth = ((cssW * 0.95) / refWidth) * REF;
   const fitHeight = cssH * 0.85;
   const fontSize = Math.min(fitWidth, fitHeight) | 0;
-  hud.font = `700 ${fontSize}px ${swipeFont}`;
+  hud.font = `${fontSize}px ${SWIPE_FONT}`;
   hud.fillStyle = `rgb(${swipeFg.r}, ${swipeFg.g}, ${swipeFg.b})`;
   hud.fillText(name, cssW / 2, cssH / 2);
   hud.restore();
