@@ -95,6 +95,18 @@
         min-height: 12px;
         text-transform: none;
       }
+      .audio-hint {
+        font: 10px/1.5 var(--mono);
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        text-transform: none;
+        display: grid;
+        gap: 2px;
+      }
+      .audio-hint b {
+        color: var(--ink);
+        font-weight: 400;
+      }
     </style>
   </head>
   <body>
@@ -103,10 +115,12 @@
     <div class="panel">
       <div class="audio-row">
         <button id="micBtn">mic</button>
-        <button id="fileBtn">file</button>
-        <input id="fileInput" type="file" accept="audio/*" hidden />
         <button id="tabBtn">tab audio</button>
         <button id="stopBtn" hidden>stop</button>
+      </div>
+      <div class="audio-hint">
+        <div><b>mic</b> — スマホはこちらでスピーカーから集音</div>
+        <div><b>tab audio</b> — PCで別タブの BGM を取り込む</div>
       </div>
       <div class="audio-status" id="audioStatus"></div>
     </div>

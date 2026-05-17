@@ -185,7 +185,6 @@ let audioCtx: AudioContext | null = null;
 let analyser: AnalyserNode | null = null;
 let freqBuf: Uint8Array<ArrayBuffer> = new Uint8Array(0);
 let timeBuf: Uint8Array<ArrayBuffer> = new Uint8Array(0);
-let audioElement: HTMLAudioElement | null = null;
 let audioActive = false;
 let envBass = 0;
 let envMid = 0;
@@ -896,7 +895,6 @@ async function startAudio(
 
 async function stopAudio() {
   audioActive = false;
-  if (audioElement) { audioElement.pause(); audioElement.src = ""; audioElement = null; }
   if (audioCtx) { try { await audioCtx.close(); } catch {} audioCtx = null; }
   analyser = null;
   envBass = envMid = envHi = 0;
@@ -920,33 +918,19 @@ document.getElementById("micBtn")!.addEventListener("click", async () => {
   }
 });
 
-const fileInput = document.getElementById("fileInput") as HTMLInputElement;
-document.getElementById("fileBtn")!.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", async () => {
-  const file = fileInput.files?.[0];
-  if (!file) return;
-  try {
-    await startAudio(`再生中: ${file.name}`, async (ctx, pre) => {
-      audioElement = new Audio(URL.createObjectURL(file));
-      audioElement.loop = true;
-      const src = ctx.createMediaElementSource(audioElement);
-      src.connect(pre);
-      pre.connect(ctx.destination);
-      await audioElement.play();
-    });
-  } catch (err) {
-    audioStatus.textContent = "再生できませんでした";
-    console.error(err);
-  }
-  fileInput.value = "";
-});
-
 document.getElementById("tabBtn")!.addEventListener("click", async () => {
   try {
+    // Keep focus on this tab even when the user picks another tab to share.
+    // Chrome 105+ only; other browsers silently ignore the option.
+    type FocusController = { setFocusBehavior?: (b: "no-focus-change" | "focus-captured-surface") => void };
+    const CC = (window as unknown as { CaptureController?: new () => FocusController }).CaptureController;
+    const controller = CC ? new CC() : undefined;
+    controller?.setFocusBehavior?.("no-focus-change");
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: true,
-    });
+      ...(controller ? { controller } : {}),
+    } as DisplayMediaStreamOptions);
     for (const t of stream.getVideoTracks()) t.stop();
     if (stream.getAudioTracks().length === 0) {
       audioStatus.textContent = "「音声を共有」にチェックを入れてください";
@@ -1045,7 +1029,8 @@ function triggerDrop() {
   swapShape();
 }
 
-window.addEventListener("pointerdown", () => {
+window.addEventListener("pointerdown", (e) => {
+  if ((e.target as Element | null)?.closest(".panel")) return;
   if (!audioActive) {
     swapShape();
     currentBgIdx = (currentBgIdx + 1) % BG_MODES.length;
