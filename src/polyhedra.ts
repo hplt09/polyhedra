@@ -877,8 +877,14 @@ const particleColorTable: [number, number, number][][] = BG_MODES.map((m) =>
 // ---------------------------------------------------------------------------
 // Audio plumbing.
 // ---------------------------------------------------------------------------
+// Track the live MediaStream so stopAudio can release the OS-level mic/tab
+// capture indicator — closing the AudioContext alone leaves the tracks
+// running and the browser keeps showing the recording dot.
+let activeStream: MediaStream | null = null;
+
 async function startAudio(
   label: string,
+  stream: MediaStream | null,
   setup: (ctx: AudioContext, pre: GainNode) => Promise<void>,
 ) {
   await stopAudio();
@@ -891,6 +897,7 @@ async function startAudio(
   await setup(ctx, pre);
   audioCtx = ctx;
   analyser = a;
+  activeStream = stream;
   freqBuf = new Uint8Array(a.frequencyBinCount);
   timeBuf = new Uint8Array(a.fftSize);
   audioActive = true;
@@ -902,6 +909,10 @@ async function startAudio(
 
 async function stopAudio() {
   audioActive = false;
+  if (activeStream) {
+    for (const t of activeStream.getTracks()) t.stop();
+    activeStream = null;
+  }
   if (audioCtx) { try { await audioCtx.close(); } catch {} audioCtx = null; }
   analyser = null;
   envBass = envMid = envHi = 0;
@@ -914,7 +925,7 @@ document.getElementById("micBtn")!.addEventListener("click", async () => {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false },
     });
-    await startAudio("マイクに連動中", async (ctx, pre) => {
+    await startAudio("マイクに連動中", stream, async (ctx, pre) => {
       const src = ctx.createMediaStreamSource(stream);
       // Phone mics tend to feed thin/quiet signal; boost the analyser input
       // so kick detection and the bounce respond visibly.
@@ -951,8 +962,8 @@ document.getElementById("tabBtn")!.addEventListener("click", async () => {
       audioStatus.textContent = "「音声を共有」にチェックを入れてください";
       return;
     }
-    await startAudio("タブ音声に連動中", async (ctx, pre) => {
-      const audioOnly = new MediaStream(stream.getAudioTracks());
+    const audioOnly = new MediaStream(stream.getAudioTracks());
+    await startAudio("タブ音声に連動中", audioOnly, async (ctx, pre) => {
       const src = ctx.createMediaStreamSource(audioOnly);
       src.connect(pre);
     });
