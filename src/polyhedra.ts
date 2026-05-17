@@ -1166,12 +1166,14 @@ function drawWaveform(
     const a = Math.abs(timeBuf[i] - 128);
     if (a > peak) peak = a;
   }
-  const ampScale = Math.min(16, 120 / peak);
+  const ampScale = Math.min(40, 240 / peak);
   const maxOffset = WAVEFORM_H * 0.48;
   for (let i = 0; i < WAVEFORM_W; i++) {
     const sampleIdx = Math.floor((i / WAVEFORM_W) * N);
     const v = ((timeBuf[sampleIdx] - 128) / 128) * ampScale;
-    const offset = Math.max(-1, Math.min(1, v)) * maxOffset;
+    // Soft-clip with tanh so peaks taper instead of flatlining at the rail
+    // (the flat rail was rendering as an underline at high gain).
+    const offset = Math.tanh(v) * maxOffset;
     const py = cy + offset;
     if (i === 0) hud.moveTo(x + i, py);
     else hud.lineTo(x + i, py);
