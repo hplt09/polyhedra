@@ -1345,7 +1345,11 @@ function frame() {
   const swapPop = shapeSwapTimer > 0
     ? 1 + Math.pow(shapeSwapTimer / SHAPE_SWAP_FRAMES, 0.7) * 0.22
     : 1;
-  const heroSize = Math.min(cssW, cssH) * 0.085 *
+  // On mobile the canvas is narrow, so 0.085 of min-dim reads as tiny and
+  // makes the bass/bounce effects feel weaker than they are. Bump the base
+  // ratio so the silhouette fills more of the screen on phones.
+  const heroBase = IS_MOBILE ? 0.14 : 0.085;
+  const heroSize = Math.min(cssW, cssH) * heroBase *
     (1 + Math.pow(envBass, 1.5) * 0.35 + bounceScale * 0.5) *
     pop * swapPop;
 
