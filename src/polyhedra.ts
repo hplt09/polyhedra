@@ -272,24 +272,6 @@ let proliferateCount = 1; // 1 = single hero, > 1 = swarm
 let vhsActive = false;
 let vhsLevel = 0; // smoothed 0..1 actually applied to shader
 
-// ▽ orientation for the tetra. First rotation aligns the (1,1,1) vertex
-// axis with -Z (so the opposite face faces the camera), then a Z spin
-// places one of the upper-face vertices directly below centre — the
-// silhouette becomes an equilateral triangle pointing down.
-const TETRA_TARGET_QUAT = (() => {
-  const q1 = new THREE.Quaternion().setFromUnitVectors(
-    new THREE.Vector3(1, 1, 1).normalize(),
-    new THREE.Vector3(0, 0, -1),
-  );
-  const probe = new THREE.Vector3(1, -1, -1)
-    .normalize()
-    .applyQuaternion(q1);
-  const q2 = new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(0, 0, 1),
-    -Math.PI / 2 - Math.atan2(probe.y, probe.x),
-  );
-  return q2.multiply(q1);
-})();
 const TETRA_SHAPE_NAME = "tetra";
 const STELLA_SHAPE_NAME = "stella";
 const STELLA_CIRCLE_COUNT = 12;
@@ -297,9 +279,6 @@ const STELLA_CIRCLE_SCALE = 0.18;
 const STELLA_MERGE_SCALE = 0.95; // per-instance scale at the convergence frame
 const STELLA_MORPH_FRAMES = 100;
 let stellaMorphTimer = 0;
-const TETRA_MORPH_FRAMES = 100;
-let tetraMorphTimer = 0;
-const tetraMorphFromQuat = new THREE.Quaternion();
 
 // ---------------------------------------------------------------------------
 // Polyhedra (data + builders are pure, unchanged).
@@ -1504,25 +1483,17 @@ function swapShape() {
   // 8 sweep directions — 4 cardinal + 4 diagonal.
   shapeSwapDirection = (Math.random() * 8) | 0;
   applyShape(currentShapeIdx);
-  // Layout rolls — stella always shows as a 12-pointed mandala ring; tetra
-  // stays single (it has its own screen-fill treatment); everything else
-  // rolls for the grid-swarm.
+  // Layout rolls — stella always shows as a 12-pointed mandala ring; every
+  // other shape (tetra included) rolls for the grid-swarm.
   const swapName = SHAPES[currentShapeIdx].name;
-  const isTetraSwap = swapName === TETRA_SHAPE_NAME;
   const isStellaSwap = swapName === STELLA_SHAPE_NAME;
   if (isStellaSwap) {
     spawnStellaCircle();
     stellaMorphTimer = STELLA_MORPH_FRAMES;
-  } else if (!isTetraSwap && Math.random() < PROLIFERATE_CHANCE) {
+  } else if (Math.random() < PROLIFERATE_CHANCE) {
     spawnProliferation();
   } else {
     proliferateCount = 1;
-  }
-  // Kick off the rapid morph into ▽ pose. Capture the prior orientation
-  // so the slerp animates *from* whatever rotation was on screen.
-  if (isTetraSwap) {
-    tetraMorphFromQuat.copy(heroGroup.quaternion);
-    tetraMorphTimer = TETRA_MORPH_FRAMES;
   }
   // Roll for VHS tape look.
   vhsActive = Math.random() < VHS_CHANCE;
@@ -1938,25 +1909,14 @@ function frame() {
     if (stellaMorphTimer === 0) proliferateCount = 1;
   }
 
-  let heroSize: number;
-  if (isTetra) {
-    // Triangle silhouette ratios for a unit tetra viewed face-on:
-    // 1.634 wide × 1.414 tall in heroSize units.
-    const fitW = (cssW * 0.68) / 1.634;
-    const fitH = (cssH * 0.68) / 1.414;
-    const tetraMod =
-      1 + Math.pow(envBass, 1.5) * 0.05 + bounceScale * 0.05;
-    heroSize = Math.min(fitW, fitH) * tetraMod;
-  } else {
-    // On mobile the canvas is narrow, so 0.085 of min-dim reads as tiny
-    // and makes the bass/bounce effects feel weaker than they are. Bump
-    // the base ratio so the silhouette fills more of the screen on phones.
-    const heroBase = IS_MOBILE ? 0.14 : 0.085;
-    const heroAudioMult =
-      1 + Math.pow(envBass, 1.5) * 0.35 + bounceScale * 0.5;
-    heroSize =
-      Math.min(cssW, cssH) * heroBase * heroAudioMult * pop * swapPop;
-  }
+  // On mobile the canvas is narrow, so 0.085 of min-dim reads as tiny and
+  // makes the bass/bounce effects feel weaker than they are. Bump the base
+  // ratio so the silhouette fills more of the screen on phones.
+  const heroBase = IS_MOBILE ? 0.14 : 0.085;
+  const heroAudioMult =
+    1 + Math.pow(envBass, 1.5) * 0.35 + bounceScale * 0.5;
+  const heroSize =
+    Math.min(cssW, cssH) * heroBase * heroAudioMult * pop * swapPop;
 
   if (proliferateCount > 1) {
     // ---- Swarm mode: render every clone via InstancedMesh ----
@@ -1978,22 +1938,7 @@ function frame() {
     // ---- Single mode: hero mesh + edges with bounce + focal ----
     heroGroup.visible = true;
     instancedHero.visible = false;
-    if (isTetra) {
-      // Slerp from whatever rotation was on screen at swap time into the
-      // ▽ target pose over TETRA_MORPH_FRAMES, then lock.
-      if (tetraMorphTimer > 0) {
-        const t = 1 - tetraMorphTimer / TETRA_MORPH_FRAMES;
-        const e = 1 - Math.pow(1 - t, 3); // ease-out cubic
-        heroGroup.quaternion
-          .copy(tetraMorphFromQuat)
-          .slerp(TETRA_TARGET_QUAT, e);
-        tetraMorphTimer--;
-      } else {
-        heroGroup.quaternion.copy(TETRA_TARGET_QUAT);
-      }
-      heroGroup.position.x = 0;
-      heroGroup.position.y = toWorldY(cssH / 2 + bouncePosY);
-    } else if (isStella) {
+    if (isStella) {
       // Big final stella stays centred and just keeps spinning.
       heroGroup.rotation.x = shapeRotX;
       heroGroup.rotation.y = shapeRotY;
