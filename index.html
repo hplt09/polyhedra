@@ -187,6 +187,37 @@
       }
       .bpm-readout.locked {
         color: var(--accent);
+        cursor: pointer;
+      }
+      .bpm-readout.locked:hover {
+        opacity: 0.65;
+      }
+      .shape-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .shape-label {
+        font: 10px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .shape-row select {
+        font: 10px/1 var(--mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ink);
+        background: transparent;
+        border: 1px solid var(--panel-border);
+        padding: 6px 8px;
+        border-radius: 2px;
+        cursor: pointer;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      .shape-row select:hover {
+        border-color: var(--accent);
       }
 
       /* Splash overlay — shown once per load to introduce the controls.
@@ -319,6 +350,10 @@
       <div class="bpm-row">
         <button id="tapBtn">tap tempo</button>
         <span id="tapBpm" class="bpm-readout">—</span>
+      </div>
+      <div class="shape-row">
+        <label for="shapeSelect" class="shape-label">shape</label>
+        <select id="shapeSelect"></select>
       </div>
     </div>
     <script type="module" src="/src/polyhedra.ts"></script>

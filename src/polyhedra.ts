@@ -396,75 +396,122 @@ function makeAntiprism(name: string, n: number, height: number): Polyhedron {
   return makePolyhedron(name, [...top, ...bot], faces);
 }
 
-function makeDodecahedron(): Polyhedron {
+// Shared base geometry for the regular dodecahedron — 20 vertices and the
+// 12 face direction vectors (each pointing outward from the origin through a
+// face centre). Used by both makeDodecahedron and makeGreatStellatedDodecahedron.
+function dodecaBaseVerts(): [number, number, number][] {
   const IP = 1 / PHI;
   const verts: [number, number, number][] = [];
   for (const sx of [1, -1])
     for (const sy of [1, -1])
-      for (const sz of [1, -1]) {
+      for (const sz of [1, -1])
         verts.push([sx, sy, sz]);
-      }
   for (const a of [1, -1])
     for (const b of [1, -1]) {
       verts.push([0, a * PHI, b * IP]);
       verts.push([a * IP, 0, b * PHI]);
       verts.push([a * PHI, b * IP, 0]);
     }
-  const faceDirs: [number, number, number][] = [];
+  return verts;
+}
+function dodecaFaceDirs(): [number, number, number][] {
+  const dirs: [number, number, number][] = [];
   for (const a of [1, -1])
     for (const b of [1, -1]) {
-      faceDirs.push([0, a, b * PHI]);
-      faceDirs.push([a, b * PHI, 0]);
-      faceDirs.push([a * PHI, 0, b]);
+      dirs.push([0, a, b * PHI]);
+      dirs.push([a, b * PHI, 0]);
+      dirs.push([a * PHI, 0, b]);
     }
-  const faces: number[][] = faceDirs.map((dir) => {
-    const top5 = verts
-      .map((v, idx) => ({
-        idx,
-        d: v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2],
-      }))
-      .sort((a, b) => b.d - a.d)
-      .slice(0, 5)
-      .map((x) => x.idx);
-    const cx = top5.reduce((s, i) => s + verts[i][0], 0) / 5;
-    const cy = top5.reduce((s, i) => s + verts[i][1], 0) / 5;
-    const cz = top5.reduce((s, i) => s + verts[i][2], 0) / 5;
-    let ux = Math.abs(dir[0]) < 0.9 ? 1 : 0;
-    let uy = Math.abs(dir[0]) < 0.9 ? 0 : 1;
-    let uz = 0;
-    const dlen2 = dir[0] ** 2 + dir[1] ** 2 + dir[2] ** 2;
-    const du = (dir[0] * ux + dir[1] * uy + dir[2] * uz) / dlen2;
-    ux -= dir[0] * du;
-    uy -= dir[1] * du;
-    uz -= dir[2] * du;
-    const ul = Math.hypot(ux, uy, uz);
-    ux /= ul;
-    uy /= ul;
-    uz /= ul;
-    let vx = dir[1] * uz - dir[2] * uy;
-    let vy = dir[2] * ux - dir[0] * uz;
-    let vz = dir[0] * uy - dir[1] * ux;
-    const vl = Math.hypot(vx, vy, vz);
-    vx /= vl;
-    vy /= vl;
-    vz /= vl;
-    return top5
-      .map((i) => {
-        const dx = verts[i][0] - cx;
-        const dy = verts[i][1] - cy;
-        const dz = verts[i][2] - cz;
-        return {
-          idx: i,
-          angle: Math.atan2(
-            dx * vx + dy * vy + dz * vz,
-            dx * ux + dy * uy + dz * uz,
-          ),
-        };
-      })
-      .sort((a, b) => a.angle - b.angle)
-      .map((x) => x.idx);
-  });
+  return dirs;
+}
+// For a given face direction, pick the 5 base vertices nearest that face
+// and return them sorted CCW around the face centre, along with the centre
+// coordinates so callers can stack pyramids / extrude / etc.
+function dodecaFacePentagon(
+  verts: [number, number, number][],
+  dir: [number, number, number],
+): { sorted: number[]; cx: number; cy: number; cz: number } {
+  const top5 = verts
+    .map((v, idx) => ({
+      idx,
+      d: v[0] * dir[0] + v[1] * dir[1] + v[2] * dir[2],
+    }))
+    .sort((a, b) => b.d - a.d)
+    .slice(0, 5)
+    .map((x) => x.idx);
+  const cx = top5.reduce((s, i) => s + verts[i][0], 0) / 5;
+  const cy = top5.reduce((s, i) => s + verts[i][1], 0) / 5;
+  const cz = top5.reduce((s, i) => s + verts[i][2], 0) / 5;
+  // Build a tangent basis (u, v) on the face plane so we can compute each
+  // vertex's angle around the centre for consistent CCW winding.
+  let ux = Math.abs(dir[0]) < 0.9 ? 1 : 0;
+  let uy = Math.abs(dir[0]) < 0.9 ? 0 : 1;
+  let uz = 0;
+  const dlen2 = dir[0] ** 2 + dir[1] ** 2 + dir[2] ** 2;
+  const du = (dir[0] * ux + dir[1] * uy + dir[2] * uz) / dlen2;
+  ux -= dir[0] * du;
+  uy -= dir[1] * du;
+  uz -= dir[2] * du;
+  const ul = Math.hypot(ux, uy, uz);
+  ux /= ul;
+  uy /= ul;
+  uz /= ul;
+  let vx = dir[1] * uz - dir[2] * uy;
+  let vy = dir[2] * ux - dir[0] * uz;
+  let vz = dir[0] * uy - dir[1] * ux;
+  const vl = Math.hypot(vx, vy, vz);
+  vx /= vl;
+  vy /= vl;
+  vz /= vl;
+  const sorted = top5
+    .map((i) => {
+      const dx = verts[i][0] - cx;
+      const dy = verts[i][1] - cy;
+      const dz = verts[i][2] - cz;
+      return {
+        idx: i,
+        angle: Math.atan2(
+          dx * vx + dy * vy + dz * vz,
+          dx * ux + dy * uy + dz * uz,
+        ),
+      };
+    })
+    .sort((a, b) => a.angle - b.angle)
+    .map((x) => x.idx);
+  return { sorted, cx, cy, cz };
+}
+
+function makeDodecahedron(): Polyhedron {
+  const verts = dodecaBaseVerts();
+  const faces = dodecaFaceDirs().map(
+    (dir) => dodecaFacePentagon(verts, dir).sorted,
+  );
   return makePolyhedron("dodeca", verts, faces);
+}
+
+// Spiky dodecahedron — a visual stand-in for the great stellated dodecahedron.
+// Each of the 12 pentagonal faces grows a pyramid outward along its normal,
+// producing 12 sharp spikes around a small core. The mathematical GSD has
+// self-intersecting pentagram faces that fan-triangulation can't represent;
+// this construction matches the iconic silhouette while keeping every face
+// strictly convex (a triangle).
+function makeGreatStellatedDodecahedron(): Polyhedron {
+  // Spike apex multiplier: 3 puts each apex well outside the dodeca's vertex
+  // sphere — after makePolyhedron's normalization the apex sits on the unit
+  // sphere and the base verts fall well inside, giving prominent spikes.
+  const SPIKE = 3.0;
+  const base = dodecaBaseVerts();
+  const verts: [number, number, number][] = base.map((v) => [...v]);
+  const faces: number[][] = [];
+  for (const dir of dodecaFaceDirs()) {
+    const { sorted, cx, cy, cz } = dodecaFacePentagon(base, dir);
+    const apexIdx = verts.length;
+    verts.push([cx * SPIKE, cy * SPIKE, cz * SPIKE]);
+    for (let i = 0; i < 5; i++) {
+      faces.push([apexIdx, sorted[i], sorted[(i + 1) % 5]]);
+    }
+  }
+  return makePolyhedron("gstella", verts, faces);
 }
 
 const SHAPES: Polyhedron[] = [
@@ -624,6 +671,7 @@ const SHAPES: Polyhedron[] = [
       [1, 2, 5],
     ],
   ),
+  makeGreatStellatedDodecahedron(),
 ];
 
 // Per-shape rotation profile — each polyhedron gets a distinct spin
@@ -1315,7 +1363,9 @@ async function stopAudio() {
     audioCtx = null;
   }
   analyser = null;
-  envBass = envMid = envHi = 0;
+  // Don't hard-zero the env values here — readAudio's early-return path
+  // means the main loop will decay them smoothly over the next few frames,
+  // avoiding the bloom/edge snap that hard-zeroing produces.
   stopBtn.hidden = true;
   audioStatus.textContent = "";
 }
@@ -1385,6 +1435,12 @@ document.getElementById("tabBtn")!.addEventListener("click", async () => {
 
 stopBtn.addEventListener("click", () => {
   void stopAudio();
+  // Clear the tap tempo too — once the audio source is dismissed the lock
+  // is almost certainly stale (different track / no track at all).
+  lockedBpm = 0;
+  tapTimes.length = 0;
+  tapBpmEl.textContent = "—";
+  tapBpmEl.classList.remove("locked");
 });
 
 const tapBpmEl = document.getElementById("tapBpm")!;
@@ -1412,9 +1468,18 @@ function handleTap() {
     }
   }
   tapBpmEl.textContent =
-    lockedBpm > 0 ? `${lockedBpm} BPM` : `${tapTimes.length}/3`;
+    lockedBpm > 0 ? `${lockedBpm} BPM ✕` : `${tapTimes.length}/3`;
   tapBpmEl.classList.toggle("locked", lockedBpm > 0);
 }
+// When the BPM is locked, clicking the readout clears it — keeps the reset
+// affordance inline with the value so the panel doesn't grow another button.
+tapBpmEl.addEventListener("click", () => {
+  if (lockedBpm === 0) return;
+  lockedBpm = 0;
+  tapTimes.length = 0;
+  tapBpmEl.textContent = "—";
+  tapBpmEl.classList.remove("locked");
+});
 document.getElementById("tapBtn")!.addEventListener("click", handleTap);
 window.addEventListener("keydown", (e) => {
   if (e.code !== "Space") return;
@@ -1423,6 +1488,24 @@ window.addEventListener("keydown", (e) => {
   if (tag === "BUTTON" || tag === "INPUT") return;
   handleTap();
   e.preventDefault();
+});
+
+// Shape jump selector — populate with every SHAPES entry; selecting an
+// option immediately swaps to that shape. swapShape syncs its value when a
+// kick/tap-grid swap fires so the dropdown always reflects what's on screen.
+const shapeSelect = document.getElementById(
+  "shapeSelect",
+) as HTMLSelectElement;
+for (let i = 0; i < SHAPES.length; i++) {
+  const opt = document.createElement("option");
+  opt.value = String(i);
+  opt.textContent = SHAPES[i].name;
+  shapeSelect.appendChild(opt);
+}
+shapeSelect.value = String(currentShapeIdx);
+shapeSelect.addEventListener("change", () => {
+  const idx = parseInt(shapeSelect.value, 10);
+  if (Number.isFinite(idx)) swapShape(idx);
 });
 
 function readAudio() {
@@ -1477,8 +1560,12 @@ function spawnParticles(n: number, energy: number) {
   }
 }
 
-function swapShape() {
-  currentShapeIdx = (currentShapeIdx + 1) % SHAPES.length;
+function swapShape(targetIdx?: number) {
+  currentShapeIdx =
+    targetIdx === undefined
+      ? (currentShapeIdx + 1) % SHAPES.length
+      : ((targetIdx % SHAPES.length) + SHAPES.length) % SHAPES.length;
+  if (shapeSelect) shapeSelect.value = String(currentShapeIdx);
   shapeSwapTimer = SHAPE_SWAP_FRAMES;
   // 8 sweep directions — 4 cardinal + 4 diagonal.
   shapeSwapDirection = (Math.random() * 8) | 0;
@@ -1709,19 +1796,35 @@ function drawShapeSwipe() {
   hud.fillStyle = `rgb(${swipeBg.r}, ${swipeBg.g}, ${swipeBg.b})`;
   hud.fillRect(0, 0, cssW, cssH);
 
-  const name = SHAPES[currentShapeIdx].name.toUpperCase();
+  const lines = swipeNameLines(SHAPES[currentShapeIdx].name);
   hud.textAlign = "center";
   hud.textBaseline = "middle";
   const REF = 100;
   hud.font = `${REF}px ${SWIPE_FONT}`;
-  const refWidth = hud.measureText(name).width || 1;
+  let refWidth = 1;
+  for (const line of lines) {
+    const w = hud.measureText(line).width;
+    if (w > refWidth) refWidth = w;
+  }
+  const LINE_SPACING = 1.05;
   const fitWidth = ((cssW * 0.95) / refWidth) * REF;
-  const fitHeight = cssH * 0.85;
+  const fitHeight = (cssH * 0.85) / (lines.length * LINE_SPACING);
   const fontSize = Math.min(fitWidth, fitHeight) | 0;
   hud.font = `${fontSize}px ${SWIPE_FONT}`;
   hud.fillStyle = `rgb(${swipeFg.r}, ${swipeFg.g}, ${swipeFg.b})`;
-  hud.fillText(name, cssW / 2, cssH / 2);
+  const lineH = fontSize * LINE_SPACING;
+  const startY = cssH / 2 - ((lines.length - 1) * lineH) / 2;
+  for (let i = 0; i < lines.length; i++) {
+    hud.fillText(lines[i], cssW / 2, startY + i * lineH);
+  }
   hud.restore();
+}
+
+// Long-form names for the swipe banner — return one entry per line. Short
+// shape names just pass through as a single uppercase line.
+function swipeNameLines(name: string): string[] {
+  if (name === "gstella") return ["GREAT STELLATED", "DODECAHEDRON"];
+  return [name.toUpperCase()];
 }
 
 function drawSnareFlash() {
@@ -1735,129 +1838,117 @@ function drawSnareFlash() {
 // ---------------------------------------------------------------------------
 // Main loop.
 // ---------------------------------------------------------------------------
-function frame() {
-  readAudio();
-
-  // Tap-tempo beat grid — when a BPM is locked, fire a shape swap every
-  // TAP_GRID_BEATS beats. Runs independently of audio so the visual stays
-  // on-grid even without an input source.
-  if (lockedBpm > 0) {
-    const beatDur = 60000 / lockedBpm;
-    const beatNum = Math.floor((performance.now() - lockedBeatPhase) / beatDur);
-    if (beatNum > lockedBeatLastFired) {
-      lockedBeatLastFired = beatNum;
-      if (beatNum > 0 && beatNum % TAP_GRID_BEATS === 0) swapShape();
+// Onset detection — pull kick/drop/snare events out of the bass/mid
+// envelopes, advance kickCount + BPM tracking, and let kick-driven swaps
+// fire when no tap-lock is active.
+function detectAudioOnsets() {
+  if (!audioActive) return;
+  bassPeak = Math.max(envBass * 1.02, bassPeak * 0.985 + envBass * 0.015);
+  midPeak = Math.max(envMid * 1.02, midPeak * 0.97 + envMid * 0.03);
+  if (
+    dropTimer === 0 &&
+    envBass > DROP_THRESHOLD &&
+    envBass / Math.max(0.15, bassPeak) > DROP_OVERSHOOT
+  ) {
+    triggerDrop();
+  }
+  if (
+    flashTimer === 0 &&
+    envMid > SNARE_THRESHOLD &&
+    envMid / Math.max(0.12, midPeak) > SNARE_OVERSHOOT
+  ) {
+    flashTimer = FLASH_FRAMES;
+    flashIntensity = envMid;
+  }
+  const bassRise = envBass - prevEnvBass;
+  prevEnvBass = envBass;
+  if (
+    kickCooldown === 0 &&
+    envBass > KICK_THRESHOLD &&
+    bassRise > KICK_RISE
+  ) {
+    kickCooldown = KICK_COOLDOWN_FRAMES;
+    kickCount++;
+    // When tap-locked, the beat grid drives shape swaps instead of kicks.
+    if (lockedBpm === 0 && kickCount % KICKS_PER_SHAPE_SWAP === 0) {
+      swapShape();
+    }
+    if (
+      kickCount % KICKS_PER_INVERT_ROLL === 0 &&
+      Math.random() < INVERT_FLIP_CHANCE
+    ) {
+      // Cycle to a different bg mode (never repeat the current).
+      const others = [0, 1, 2].filter((m) => m !== currentBgIdx);
+      currentBgIdx = others[(Math.random() * others.length) | 0];
+    }
+    const now = performance.now();
+    const last = kickTimes[kickTimes.length - 1];
+    if (last !== undefined) {
+      const dt = now - last;
+      if (dt < 200 || dt > 2000) kickTimes.length = 0;
+    }
+    kickTimes.push(now);
+    if (kickTimes.length > 8) kickTimes.shift();
+    if (kickTimes.length >= 4) {
+      let total = 0;
+      for (let i = 1; i < kickTimes.length; i++)
+        total += kickTimes[i] - kickTimes[i - 1];
+      bpm = Math.round(60000 / (total / (kickTimes.length - 1)));
     }
   }
+  if (kickCooldown > 0) kickCooldown--;
+}
 
-  // Focal glide.
-  focalX += (targetFocalX - focalX) * 0.13;
-  focalY += (targetFocalY - focalY) * 0.13;
-
-  // Onset detection.
-  if (audioActive) {
-    bassPeak = Math.max(envBass * 1.02, bassPeak * 0.985 + envBass * 0.015);
-    midPeak = Math.max(envMid * 1.02, midPeak * 0.97 + envMid * 0.03);
-    if (
-      dropTimer === 0 &&
-      envBass > DROP_THRESHOLD &&
-      envBass / Math.max(0.15, bassPeak) > DROP_OVERSHOOT
-    ) {
-      triggerDrop();
-    }
-    if (
-      flashTimer === 0 &&
-      envMid > SNARE_THRESHOLD &&
-      envMid / Math.max(0.12, midPeak) > SNARE_OVERSHOOT
-    ) {
-      flashTimer = FLASH_FRAMES;
-      flashIntensity = envMid;
-    }
-    const bassRise = envBass - prevEnvBass;
-    prevEnvBass = envBass;
-    if (
-      kickCooldown === 0 &&
-      envBass > KICK_THRESHOLD &&
-      bassRise > KICK_RISE
-    ) {
-      kickCooldown = KICK_COOLDOWN_FRAMES;
-      kickCount++;
-      // When tap-locked, the beat grid drives shape swaps instead of kicks.
-      if (lockedBpm === 0 && kickCount % KICKS_PER_SHAPE_SWAP === 0) {
-        swapShape();
-      }
-      if (
-        kickCount % KICKS_PER_INVERT_ROLL === 0 &&
-        Math.random() < INVERT_FLIP_CHANCE
-      ) {
-        // Cycle to a different bg mode (never repeat the current).
-        const others = [0, 1, 2].filter((m) => m !== currentBgIdx);
-        currentBgIdx = others[(Math.random() * others.length) | 0];
-      }
-      const now = performance.now();
-      const last = kickTimes[kickTimes.length - 1];
-      if (last !== undefined) {
-        const dt = now - last;
-        if (dt < 200 || dt > 2000) kickTimes.length = 0;
-      }
-      kickTimes.push(now);
-      if (kickTimes.length > 8) kickTimes.shift();
-      if (kickTimes.length >= 4) {
-        let total = 0;
-        for (let i = 1; i < kickTimes.length; i++)
-          total += kickTimes[i] - kickTimes[i - 1];
-        bpm = Math.round(60000 / (total / (kickTimes.length - 1)));
-      }
-    }
-    if (kickCooldown > 0) kickCooldown--;
+// Animate the stella ring inward each frame so the 12 instances converge
+// at the centre over STELLA_MORPH_FRAMES and the rotation offsets decay so
+// they all align. When the timer expires we flip to single-mesh mode.
+function advanceStellaMorph() {
+  if (
+    stellaMorphTimer <= 0 ||
+    proliferateCount !== STELLA_CIRCLE_COUNT ||
+    SHAPES[currentShapeIdx].name !== STELLA_SHAPE_NAME
+  ) {
+    return;
   }
+  const t = 1 - stellaMorphTimer / STELLA_MORPH_FRAMES;
+  const eased = t * t * (3 - 2 * t);
+  const cx = cssW / 2;
+  const cy = cssH / 2;
+  const radius = (1 - eased) * Math.min(cssW, cssH) * 0.32;
+  const scale =
+    STELLA_CIRCLE_SCALE + eased * (STELLA_MERGE_SCALE - STELLA_CIRCLE_SCALE);
+  const offSmooth = 1 - eased;
+  for (let i = 0; i < STELLA_CIRCLE_COUNT; i++) {
+    const angle = (i / STELLA_CIRCLE_COUNT) * Math.PI * 2 - Math.PI / 2;
+    const inst = heroInstances[i];
+    inst.x = cx + Math.cos(angle) * radius;
+    inst.y = cy + Math.sin(angle) * radius;
+    inst.scale = scale;
+    inst.rotOffX = angle * 0.7 * offSmooth;
+    inst.rotOffY = angle * 1.3 * offSmooth;
+  }
+  stellaMorphTimer--;
+  if (stellaMorphTimer === 0) proliferateCount = 1;
+}
 
-  // Bounce spring + decay.
-  bounceVelY += -bouncePosY * BOUNCE_STIFFNESS - bounceVelY * BOUNCE_DAMPING;
-  bouncePosY += bounceVelY;
-  bounceScale *= BOUNCE_SCALE_DECAY;
-
-  if (dropTimer > 0) dropTimer--;
-  if (shakeTimer > 0) shakeTimer--;
-  if (flashTimer > 0) flashTimer--;
-  if (shapeSwapTimer > 0) shapeSwapTimer--;
-
-
-  // Camera shake (applied to camera position; HUD shake passed separately).
-  const shakeT = shakeTimer > 0 ? shakeTimer / SHAKE_FRAMES : 0;
-  const sx = shakeT > 0 ? (Math.random() - 0.5) * shakeStrength * shakeT : 0;
-  const sy = shakeT > 0 ? (Math.random() - 0.5) * shakeStrength * shakeT : 0;
-
-  // Background is fixed to the active mode's colour. setRGB defaults to the
-  // linear working space, so we explicitly tag the input as sRGB to match
-  // the way the swipe panel is painted on the HUD canvas — without this
-  // the bg ends up much more washed-out than the swipe band it transitions
-  // to/from.
-  const mode = BG_MODES[currentBgIdx];
-  (scene.background as THREE.Color).setRGB(
-    mode.bg.r / 255,
-    mode.bg.g / 255,
-    mode.bg.b / 255,
-    THREE.SRGBColorSpace,
-  );
-
-  heroMat.color.set(mode.heroHex);
-  heroMat.emissive.set(mode.heroEmissiveHex);
-  edgeMat.color.set(mode.edgeHex);
-  edgeMat.opacity = mode.edgeOpacityBase + (audioActive ? envBass * 0.35 : 0);
-
-  const gc = mode.gridColor;
-  gridUniforms.uColor.value.set(gc[0], gc[1], gc[2]);
-  gridUniforms.uFocal.value.set(focalX, cssH - focalY);
-  gridUniforms.uBass.value = audioActive ? envBass : 0;
-  gridUniforms.uTime.value = performance.now();
-
-  // Hero rotation + size (shared between single and swarm modes).
+// Hero rendering — rotation accumulation, size, position, and the swarm /
+// single-mesh dispatch. Also drives the tetra rune backdrop visibility and
+// the stella ring → centre morph.
+function renderHero(mode: BgPaletteSet) {
   const shapeName = SHAPES[currentShapeIdx].name;
   const isTetra = shapeName === TETRA_SHAPE_NAME;
   const isStella = shapeName === STELLA_SHAPE_NAME;
-  // Use the per-shape spin profile during the swarm/ring phase, then fall
-  // back to the default once stella has merged into a single big mesh.
+
+  tetraRuneMesh.visible = isTetra && tetraRuneReady;
+  if (tetraRuneMesh.visible) {
+    tetraRuneUniforms.uColor.value.set(mode.edgeHex);
+    tetraRuneUniforms.uTime.value = performance.now();
+  }
+
+  advanceStellaMorph();
+
+  // Per-shape spin profile during the swarm/ring phase; default once stella
+  // has merged into a single big mesh.
   const spin =
     isStella && proliferateCount === 1
       ? DEFAULT_SPIN
@@ -1865,53 +1956,13 @@ function frame() {
   shapeRotX += spin.baseX + Math.pow(envBass, SHAPE_SPIN_EXP) * spin.bassMultX;
   shapeRotY += spin.baseY + Math.pow(envMid, SHAPE_SPIN_EXP) * spin.midMultY;
   const pop = dropTimer > 0 ? 1 + (dropTimer / DROP_FRAMES) * 0.45 : 1;
-  // swapPop kept modest so the cube growth doesn't spike bloom contribution
-  // (which was responsible for a brief white-out on swap moments).
+  // swapPop kept modest so swap-time growth doesn't spike bloom contribution.
   const swapPop =
     shapeSwapTimer > 0
       ? 1 + Math.pow(shapeSwapTimer / SHAPE_SWAP_FRAMES, 0.7) * 0.22
       : 1;
-  // tetra gets a static, screen-filling treatment — fixed ▽ orientation,
-  // sized so the triangle silhouette fills ~68% of the screen, with a
-  // gentle audio modulation that never overflows the frame.
-  // Show the rune backdrop the moment tetra is swapped in (don't wait for
-  // the morph to lock). Tint with the mode's edge colour and drive the
-  // shader's time uniform for the per-glyph twinkle.
-  tetraRuneMesh.visible = isTetra && tetraRuneReady;
-  if (tetraRuneMesh.visible) {
-    tetraRuneUniforms.uColor.value.set(mode.edgeHex);
-    tetraRuneUniforms.uTime.value = performance.now();
-  }
-
-  // Stella ring → centre morph. Each frame moves the 12 instances inward,
-  // grows their per-instance scale, and decays the rotation offsets so that
-  // they all align at convergence. When the timer hits 0, we flip to
-  // single-mesh mode and a big stella replaces the ring.
-  if (isStella && stellaMorphTimer > 0 && proliferateCount === STELLA_CIRCLE_COUNT) {
-    const t = 1 - stellaMorphTimer / STELLA_MORPH_FRAMES;
-    const eased = t * t * (3 - 2 * t);
-    const cx = cssW / 2;
-    const cy = cssH / 2;
-    const radius = (1 - eased) * Math.min(cssW, cssH) * 0.32;
-    const scale =
-      STELLA_CIRCLE_SCALE + eased * (STELLA_MERGE_SCALE - STELLA_CIRCLE_SCALE);
-    const offSmooth = 1 - eased;
-    for (let i = 0; i < STELLA_CIRCLE_COUNT; i++) {
-      const angle = (i / STELLA_CIRCLE_COUNT) * Math.PI * 2 - Math.PI / 2;
-      const inst = heroInstances[i];
-      inst.x = cx + Math.cos(angle) * radius;
-      inst.y = cy + Math.sin(angle) * radius;
-      inst.scale = scale;
-      inst.rotOffX = angle * 0.7 * offSmooth;
-      inst.rotOffY = angle * 1.3 * offSmooth;
-    }
-    stellaMorphTimer--;
-    if (stellaMorphTimer === 0) proliferateCount = 1;
-  }
-
-  // On mobile the canvas is narrow, so 0.085 of min-dim reads as tiny and
-  // makes the bass/bounce effects feel weaker than they are. Bump the base
-  // ratio so the silhouette fills more of the screen on phones.
+  // On mobile the canvas is narrow, so the base ratio is lifted to fill more
+  // of the screen and to make bass/bounce reactions read on smaller silhouettes.
   const heroBase = IS_MOBILE ? 0.14 : 0.085;
   const heroAudioMult =
     1 + Math.pow(envBass, 1.5) * 0.35 + bounceScale * 0.5;
@@ -1934,26 +1985,28 @@ function frame() {
       instancedHero.setMatrixAt(i, _instM4);
     }
     instancedHero.instanceMatrix.needsUpdate = true;
-  } else {
-    // ---- Single mode: hero mesh + edges with bounce + focal ----
-    heroGroup.visible = true;
-    instancedHero.visible = false;
-    if (isStella) {
-      // Big final stella stays centred and just keeps spinning.
-      heroGroup.rotation.x = shapeRotX;
-      heroGroup.rotation.y = shapeRotY;
-      heroGroup.position.x = 0;
-      heroGroup.position.y = toWorldY(cssH / 2 + bouncePosY);
-    } else {
-      heroGroup.rotation.x = shapeRotX;
-      heroGroup.rotation.y = shapeRotY;
-      heroGroup.position.x = toWorldX(focalX);
-      heroGroup.position.y = toWorldY(focalY + bouncePosY);
-    }
-    heroGroup.scale.setScalar(heroSize);
+    return;
   }
 
-  // Confetti physics + buffer write.
+  // ---- Single mode: hero mesh + edges with bounce + focal ----
+  heroGroup.visible = true;
+  instancedHero.visible = false;
+  heroGroup.rotation.x = shapeRotX;
+  heroGroup.rotation.y = shapeRotY;
+  if (isStella) {
+    // Big final stella stays centred and just keeps spinning.
+    heroGroup.position.x = 0;
+    heroGroup.position.y = toWorldY(cssH / 2 + bouncePosY);
+  } else {
+    heroGroup.position.x = toWorldX(focalX);
+    heroGroup.position.y = toWorldY(focalY + bouncePosY);
+  }
+  heroGroup.scale.setScalar(heroSize);
+}
+
+// Confetti physics + buffer write — one entry per live particle, oldest
+// first so splice removals don't shuffle indices being read.
+function updateParticleBuffers() {
   let pCount = 0;
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
@@ -1985,8 +2038,11 @@ function frame() {
   ptsGeom.getAttribute("position").needsUpdate = true;
   ptsGeom.getAttribute("aColor").needsUpdate = true;
   ptsGeom.getAttribute("aSize").needsUpdate = true;
+}
 
-  // Shockwaves → expanding rings.
+// Shockwaves → expanding rings. Each wave emits N_RING points per frame at
+// its current radius; the whole ring fades + spins as the wave ages out.
+function updateShockwaveBuffers(mode: BgPaletteSet) {
   let swPointCount = 0;
   const swColor = mode.shockwaveColor;
   const farX = Math.max(focalX, cssW - focalX);
@@ -2027,14 +2083,14 @@ function frame() {
   swGeom.getAttribute("position").needsUpdate = true;
   swGeom.getAttribute("aColor").needsUpdate = true;
   swGeom.getAttribute("aSize").needsUpdate = true;
+}
 
-  // Bloom — per-mode baseline (so bright backgrounds don't drown the
-  // silhouette) plus a softer bass boost. HDR + tone mapping handle
-  // headroom now, so we don't need a huge linear-domain strength.
+// Post-processing uniform updates — bloom, chromatic aberration baseline,
+// and the smoothly-lerped VHS intensity. HDR + tone mapping mean we don't
+// need huge linear-domain strengths.
+function updatePostFX(mode: BgPaletteSet) {
   bloomPass.strength = mode.bloomStrength + (audioActive ? envBass * 0.35 : 0);
   bloomPass.threshold = mode.bloomThreshold;
-
-  // Chromatic aberration: subtle baseline, scales with bass, surges on drops.
   const baselineChroma = 0.2;
   const audioChroma = audioActive ? envBass * 0.85 : 0;
   const dropChroma = dropTimer > 0 ? (dropTimer / DROP_FRAMES) * 1.6 : 0;
@@ -2042,22 +2098,83 @@ function frame() {
     baselineChroma + audioChroma + dropChroma;
   chromaticVignettePass.uniforms.uVignette.value =
     0.7 - (audioActive ? envBass * 0.15 : 0);
-  // Smoothly lerp VHS intensity toward its target so the look fades in
-  // and out instead of snapping mid-frame.
   vhsLevel += ((vhsActive ? 1 : 0) - vhsLevel) * 0.12;
   chromaticVignettePass.uniforms.uVhs.value = vhsLevel;
   chromaticVignettePass.uniforms.uTime.value = performance.now();
   chromaticVignettePass.uniforms.uResolution.value.set(cssW, cssH);
+}
 
-  // Camera shake.
+function frame() {
+  readAudio();
+  // When audio is inactive (never started or just stopped), decay the band
+  // envelopes toward zero. readAudio early-returns in this state so they
+  // would otherwise stay frozen at their last reading.
+  if (!audioActive) {
+    envBass *= 0.92;
+    envMid *= 0.92;
+    envHi *= 0.92;
+  }
+
+  // Tap-tempo beat grid — when a BPM is locked, fire a shape swap every
+  // TAP_GRID_BEATS beats. Runs independently of audio so the visual stays
+  // on-grid even without an input source.
+  if (lockedBpm > 0) {
+    const beatDur = 60000 / lockedBpm;
+    const beatNum = Math.floor((performance.now() - lockedBeatPhase) / beatDur);
+    if (beatNum > lockedBeatLastFired) {
+      lockedBeatLastFired = beatNum;
+      if (beatNum > 0 && beatNum % TAP_GRID_BEATS === 0) swapShape();
+    }
+  }
+
+  // Focal glide + onset detection.
+  focalX += (targetFocalX - focalX) * 0.13;
+  focalY += (targetFocalY - focalY) * 0.13;
+  detectAudioOnsets();
+
+  // Bounce spring + decay; timer ticks.
+  bounceVelY += -bouncePosY * BOUNCE_STIFFNESS - bounceVelY * BOUNCE_DAMPING;
+  bouncePosY += bounceVelY;
+  bounceScale *= BOUNCE_SCALE_DECAY;
+  if (dropTimer > 0) dropTimer--;
+  if (shakeTimer > 0) shakeTimer--;
+  if (flashTimer > 0) flashTimer--;
+  if (shapeSwapTimer > 0) shapeSwapTimer--;
+
+  // Camera shake (applied to camera; HUD draws receive the same offset).
+  const shakeT = shakeTimer > 0 ? shakeTimer / SHAKE_FRAMES : 0;
+  const sx = shakeT > 0 ? (Math.random() - 0.5) * shakeStrength * shakeT : 0;
+  const sy = shakeT > 0 ? (Math.random() - 0.5) * shakeStrength * shakeT : 0;
+
+  // Active palette → scene background + materials + grid uniforms. setRGB
+  // defaults to the linear working space, so we explicitly tag the input
+  // as sRGB to match the swipe panel painted on the HUD canvas.
+  const mode = BG_MODES[currentBgIdx];
+  (scene.background as THREE.Color).setRGB(
+    mode.bg.r / 255,
+    mode.bg.g / 255,
+    mode.bg.b / 255,
+    THREE.SRGBColorSpace,
+  );
+  heroMat.color.set(mode.heroHex);
+  heroMat.emissive.set(mode.heroEmissiveHex);
+  edgeMat.color.set(mode.edgeHex);
+  edgeMat.opacity = mode.edgeOpacityBase + (audioActive ? envBass * 0.35 : 0);
+  const gc = mode.gridColor;
+  gridUniforms.uColor.value.set(gc[0], gc[1], gc[2]);
+  gridUniforms.uFocal.value.set(focalX, cssH - focalY);
+  gridUniforms.uBass.value = audioActive ? envBass : 0;
+  gridUniforms.uTime.value = performance.now();
+
+  renderHero(mode);
+  updateParticleBuffers();
+  updateShockwaveBuffers(mode);
+  updatePostFX(mode);
+
   camera.position.x = sx;
   camera.position.y = -sy;
-
   composer.render();
-
-  // 2D HUD layer.
   drawHUD(sx, -sy);
-
   requestAnimationFrame(frame);
 }
 
