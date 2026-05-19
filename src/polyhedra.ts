@@ -68,7 +68,7 @@ const KICKS_PER_INVERT_ROLL = 2;
 const INVERT_FLIP_CHANCE = 0.55;
 const SHAPE_SWAP_FRAMES = 36;
 const SWIPE_FONT = '"Bebas Neue", "Anton", "Archivo Black", sans-serif';
-const VHS_CHANCE = 0.3;
+const VHS_CHANCE = 0.1;
 
 const RUNIC_NAME_FONT =
   '24px "Madeon Runes", ui-monospace, "SF Mono", Menlo, monospace';
@@ -218,6 +218,28 @@ let shapeRotY = 0.7;
 let currentShapeIdx = 0;
 let shapeSwapTimer = 0;
 let shapeSwapDirection = 0;
+const SWIPE_STYLES = ["band", "waves", "synapse"] as const;
+type SwipeStyle = (typeof SWIPE_STYLES)[number];
+let shapeSwapStyle: SwipeStyle = "band";
+// Per-row, per-node shape names for the synapse style. Regenerated each
+// time the synapse style rolls so the network is different per swap. The
+// target node (centre row, centre column) is overridden at render time with
+// the actual new shape name.
+const SYNAPSE_ROWS = 5;
+const SYNAPSE_NODES = 4;
+// Store SHAPES indices instead of names so we can render `01·NAME` captions
+// without re-deriving the index by name lookup.
+let synapseNetwork: number[][] = [];
+function generateSynapseNetwork() {
+  synapseNetwork = [];
+  for (let r = 0; r < SYNAPSE_ROWS; r++) {
+    const row: number[] = [];
+    for (let i = 0; i < SYNAPSE_NODES; i++) {
+      row.push((Math.random() * SHAPES.length) | 0);
+    }
+    synapseNetwork.push(row);
+  }
+}
 
 let prevEnvBass = 0;
 let kickCooldown = 0;
@@ -274,6 +296,34 @@ let vhsLevel = 0; // smoothed 0..1 actually applied to shader
 
 const TETRA_SHAPE_NAME = "tetra";
 const STELLA_SHAPE_NAME = "stella";
+const GSTELLA_SHAPE_NAME = "gstella";
+// Cinematic letterbox state — smoothly lerps to 1 when a "feature" shape is
+// active (tetra or gstella), back to 0 otherwise. Drawn on the HUD canvas
+// over the GL output.
+const LETTERBOX_SHAPES = new Set([
+  TETRA_SHAPE_NAME,
+  STELLA_SHAPE_NAME,
+  GSTELLA_SHAPE_NAME,
+]);
+// Stella is always presented against the WHITE palette regardless of the
+// currentBgIdx cycle.
+const WHITE_MODE_IDX = 1;
+function activeMode(): BgPaletteSet {
+  if (SHAPES[currentShapeIdx].name === STELLA_SHAPE_NAME) {
+    return BG_MODES[WHITE_MODE_IDX];
+  }
+  return BG_MODES[currentBgIdx];
+}
+let letterboxLevel = 0;
+const sessionStartMs = performance.now();
+function formatElapsed(ms: number): string {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
 const STELLA_CIRCLE_COUNT = 12;
 const STELLA_CIRCLE_SCALE = 0.18;
 const STELLA_MERGE_SCALE = 0.95; // per-instance scale at the convergence frame
@@ -1189,6 +1239,7 @@ const chromaticVignettePass = new ShaderPass({
     uChroma: { value: 0 },
     uVignette: { value: 0.65 },
     uVhs: { value: 0 }, // 0..1 — VHS tape look intensity
+    uGrain: { value: 0.045 }, // film-grain amplitude (modulated by bass)
     uTime: { value: 0 }, // ms, for scanline/grain animation
     uResolution: { value: new THREE.Vector2(cssW, cssH) },
   },
@@ -1205,6 +1256,7 @@ const chromaticVignettePass = new ShaderPass({
     uniform float uChroma;
     uniform float uVignette;
     uniform float uVhs;
+    uniform float uGrain;
     uniform float uTime;
     uniform vec2 uResolution;
     varying vec2 vUv;
@@ -1263,6 +1315,12 @@ const chromaticVignettePass = new ShaderPass({
       float vig = 1.0 - dot(dir, dir) * (1.4 + uVhs * 0.6);
       vig = clamp(vig, vigFloor, 1.0);
       col *= vig;
+
+      // Subtle always-on film grain — adds a slight analogue texture that
+      // unifies the silhouette, edges and bloom. Independent of the VHS
+      // grain (which is much louder and only active occasionally).
+      float grain = rand(vUv * 1.7 + fract(uTime * 0.0009)) - 0.5;
+      col += vec3(grain * uGrain);
 
       gl_FragColor = vec4(col, 1.0);
     }
@@ -1569,6 +1627,16 @@ function swapShape(targetIdx?: number) {
   shapeSwapTimer = SHAPE_SWAP_FRAMES;
   // 8 sweep directions — 4 cardinal + 4 diagonal.
   shapeSwapDirection = (Math.random() * 8) | 0;
+  shapeSwapStyle = SWIPE_STYLES[(Math.random() * SWIPE_STYLES.length) | 0];
+  // Waves only read clearly when sliding sideways — clamp to indices 2/3
+  // (left→right / right→left) when the wave style is rolled.
+  if (shapeSwapStyle === "waves") {
+    shapeSwapDirection = Math.random() < 0.5 ? 2 : 3;
+  } else if (shapeSwapStyle === "synapse") {
+    // Synapse uses purely vertical band travel — top↓ or bottom↑.
+    shapeSwapDirection = Math.random() < 0.5 ? 0 : 1;
+    generateSynapseNetwork();
+  }
   applyShape(currentShapeIdx);
   // Layout rolls — stella always shows as a 12-pointed mandala ring; every
   // other shape (tetra included) rolls for the grid-swarm.
@@ -1635,17 +1703,152 @@ function drawHUD(shakeX: number, shakeY: number) {
   hud.clearRect(0, 0, cssW, cssH);
   hud.save();
   hud.translate(shakeX, shakeY);
+  drawHUDFrame();
   drawHUDText();
   hud.restore();
+  drawLetterbox();
   drawShapeSwipe();
   drawSnareFlash();
 }
 
+// Viewfinder-style corner brackets + a tiny "session" metadata strip at the
+// bottom-left. Adds structure to empty corners and gives the canvas the
+// graphic-design feel of a Madeon / Alltta visual identity.
+function drawHUDFrame() {
+  const mode = activeMode();
+  hud.strokeStyle = mode.hudText;
+  hud.lineWidth = 1;
+  const cbm = 14; // margin from safe-area edge
+  const cbl = 18; // bracket arm length
+  // Brackets follow the safe area, sliding inward as the letterbox bars
+  // grow so they stay legible above the black strips.
+  const barH = cssH * 0.075 * letterboxLevel;
+  const top = barH + cbm;
+  const bot = cssH - barH - cbm;
+  // top-left
+  hud.beginPath();
+  hud.moveTo(cbm, top + cbl);
+  hud.lineTo(cbm, top);
+  hud.lineTo(cbm + cbl, top);
+  hud.stroke();
+  // top-right
+  hud.beginPath();
+  hud.moveTo(cssW - cbm - cbl, top);
+  hud.lineTo(cssW - cbm, top);
+  hud.lineTo(cssW - cbm, top + cbl);
+  hud.stroke();
+  // bottom-left
+  hud.beginPath();
+  hud.moveTo(cbm, bot - cbl);
+  hud.lineTo(cbm, bot);
+  hud.lineTo(cbm + cbl, bot);
+  hud.stroke();
+  // bottom-right
+  hud.beginPath();
+  hud.moveTo(cssW - cbm - cbl, bot);
+  hud.lineTo(cssW - cbm, bot);
+  hud.lineTo(cssW - cbm, bot - cbl);
+  hud.stroke();
+
+  // Registration-mark "+" inside each corner — a sub-tick for that
+  // measurement-instrument precision feel.
+  const reg = 6;
+  const regOffset = cbl + 8;
+  const drawReg = (x: number, y: number) => {
+    hud.beginPath();
+    hud.moveTo(x - reg / 2, y);
+    hud.lineTo(x + reg / 2, y);
+    hud.moveTo(x, y - reg / 2);
+    hud.lineTo(x, y + reg / 2);
+    hud.stroke();
+  };
+  hud.lineWidth = 0.6;
+  drawReg(cbm + regOffset, top + regOffset);
+  drawReg(cssW - cbm - regOffset, top + regOffset);
+  drawReg(cbm + regOffset, bot - regOffset);
+  drawReg(cssW - cbm - regOffset, bot - regOffset);
+
+  // Bottom-left metadata stack — 3 lines, slight visual hierarchy. The
+  // first row sits on the same baseline as the corner bracket arm so it
+  // reads as part of the bracket grid; the next two lines are progressively
+  // dimmer for an editorial weight contrast.
+  hud.textAlign = "left";
+  hud.textBaseline = "alphabetic";
+  const metaX = HUD_MARGIN + 8;
+  hud.font = `700 ${HUD_FONT}`;
+  hud.fillStyle = mode.hudText;
+  hud.fillText("SESSION 2026.05", metaX, bot - 30);
+  hud.font = HUD_FONT;
+  hud.fillText("POLYHEDRA SERIES", metaX, bot - 18);
+  hud.fillStyle = mode.hudText.replace(/[\d.]+\)$/, "0.4)");
+  hud.fillText(
+    `SN—2026.05 · POLY—${String(currentShapeIdx + 1).padStart(2, "0")} · Φ 1.618`,
+    metaX,
+    bot - 6,
+  );
+}
+
+// Cinematic letterbox bars — fade in when a feature shape (tetra, gstella)
+// is current, fade out otherwise. The level is smoothed in the main loop so
+// the bars sweep in/out softly rather than snapping.
+function drawLetterbox() {
+  if (letterboxLevel < 0.01) return;
+  const barH = cssH * 0.075 * letterboxLevel;
+  hud.fillStyle = `rgba(0, 0, 0, ${0.78 * letterboxLevel})`;
+  hud.fillRect(0, 0, cssW, barH);
+  hud.fillRect(0, cssH - barH, cssW, barH);
+
+  // Inner cyan rule lines — a thin "frame inside the frame" that lifts the
+  // bars from pure black plates to a designed letterbox.
+  hud.strokeStyle = `rgba(58, 254, 255, ${0.55 * letterboxLevel})`;
+  hud.lineWidth = 0.8;
+  hud.beginPath();
+  hud.moveTo(0, barH - 3);
+  hud.lineTo(cssW, barH - 3);
+  hud.moveTo(0, cssH - barH + 3);
+  hud.lineTo(cssW, cssH - barH + 3);
+  hud.stroke();
+
+  // Faint scanlines inside the bars for CRT/film texture.
+  hud.strokeStyle = `rgba(58, 254, 255, ${0.08 * letterboxLevel})`;
+  hud.lineWidth = 0.5;
+  for (let y = 4; y < barH - 6; y += 4) {
+    hud.beginPath();
+    hud.moveTo(0, y);
+    hud.lineTo(cssW, y);
+    hud.stroke();
+    const y2 = cssH - barH + 5 + (y - 4);
+    if (y2 < cssH - 2) {
+      hud.beginPath();
+      hud.moveTo(0, y2);
+      hud.lineTo(cssW, y2);
+      hud.stroke();
+    }
+  }
+
+  // Centred title in the bottom bar once it's tall enough to fit text.
+  if (letterboxLevel > 0.5 && barH > 22) {
+    hud.fillStyle = `rgba(191, 245, 255, ${0.75 * letterboxLevel})`;
+    hud.font = `11px ${SWIPE_FONT}`;
+    hud.textAlign = "center";
+    hud.textBaseline = "middle";
+    hud.fillText(
+      "POLYHEDRA · 2026.05 · SESSION",
+      cssW / 2,
+      cssH - barH / 2,
+    );
+  }
+}
+
 function drawHUDText() {
-  const mode = BG_MODES[currentBgIdx];
+  const mode = activeMode();
   const textColor = mode.hudText;
   const accentColor = mode.hudAccent;
   const shape = SHAPES[currentShapeIdx];
+  // Letterbox safe-area offsets — every top-anchored coordinate slides down
+  // and every bottom-anchored one slides up so the bars never cover text.
+  const barH = cssH * 0.075 * letterboxLevel;
+  const topY = HUD_MARGIN + barH;
 
   hud.textAlign = "left";
   hud.textBaseline = "top";
@@ -1653,28 +1856,26 @@ function drawHUDText() {
   hud.fillStyle = textColor;
   const idx = String(currentShapeIdx + 1).padStart(2, "0");
   const total = String(SHAPES.length).padStart(2, "0");
-  hud.fillText(`${idx} / ${total}`, HUD_MARGIN, HUD_MARGIN);
+  hud.fillText(`${idx} / ${total}`, HUD_MARGIN, topY);
 
   hud.font = RUNIC_NAME_FONT;
   hud.fillStyle = accentColor;
-  hud.fillText(shape.name.toUpperCase(), HUD_MARGIN, HUD_MARGIN + 18);
+  hud.fillText(shape.name.toUpperCase(), HUD_MARGIN, topY + 18);
 
   hud.font = HUD_FONT;
   hud.fillStyle = textColor;
-  hud.fillText("polyhedra · studio", HUD_MARGIN, HUD_MARGIN + 48);
+  hud.fillText("polyhedra · studio", HUD_MARGIN, topY + 48);
 
   // ---- Top-right: oscilloscope (when audio active), then BEAT + BPM ----
   if (audioActive) {
     drawWaveform(
       cssW - HUD_MARGIN - WAVEFORM_W,
-      HUD_MARGIN,
+      topY,
       textColor,
       accentColor,
     );
   }
-  const readoutY = audioActive
-    ? HUD_MARGIN + WAVEFORM_H + WAVEFORM_GAP
-    : HUD_MARGIN;
+  const readoutY = audioActive ? topY + WAVEFORM_H + WAVEFORM_GAP : topY;
 
   hud.textAlign = "right";
   hud.font = HUD_FONT;
@@ -1695,9 +1896,21 @@ function drawHUDText() {
       readoutY + 16,
     );
   }
+  // Continuous session timer — independent of audio state, ticks from page
+  // load. Reads like a broadcast / capture indicator.
+  hud.fillStyle = textColor;
+  hud.fillText(
+    formatElapsed(performance.now() - sessionStartMs),
+    cssW - HUD_MARGIN,
+    readoutY + (displayBpm > 0 ? 32 : 16),
+  );
   if (audioActive) {
     hud.fillStyle = textColor;
-    hud.fillText("● live", cssW - HUD_MARGIN, cssH - HUD_MARGIN - 12);
+    hud.fillText(
+      "● live",
+      cssW - HUD_MARGIN,
+      cssH - HUD_MARGIN - barH - 12,
+    );
   }
   hud.textAlign = "left";
 }
@@ -1763,6 +1976,14 @@ const SWIPE_ANGLES = [
 
 function drawShapeSwipe() {
   if (shapeSwapTimer <= 0) return;
+  if (shapeSwapStyle === "waves") drawWavesSwipe();
+  else if (shapeSwapStyle === "synapse") drawSynapseSwipe();
+  else drawBandSwipe();
+}
+
+// Rotated band that slides across the screen, revealing the shape name as
+// it passes the centre. Eight directions × inertia easing.
+function drawBandSwipe() {
   const t = 1 - shapeSwapTimer / SHAPE_SWAP_FRAMES;
   const p = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
@@ -1795,7 +2016,335 @@ function drawShapeSwipe() {
   const swipeFg = BG_MODES[0].bg;
   hud.fillStyle = `rgb(${swipeBg.r}, ${swipeBg.g}, ${swipeBg.b})`;
   hud.fillRect(0, 0, cssW, cssH);
+  drawSwipeName(`rgb(${swipeFg.r}, ${swipeFg.g}, ${swipeFg.b})`);
+  hud.restore();
+}
 
+// Same sliding band mechanism as the band swipe, but the band's interior is
+// painted with stacked sine waves that merge into a single bold wave as the
+// band crosses the screen centre. The band entering and leaving the canvas
+// naturally fades the whole effect in and out — no explicit alpha ramp.
+function drawWavesSwipe() {
+  const t = 1 - shapeSwapTimer / SHAPE_SWAP_FRAMES;
+  const p = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  // Wave merge ramps gradually — completes around p ≈ 0.77 and stays
+  // merged while the band slides off-screen. Slower than `p * 2` so the
+  // horizontal alignment is easier to follow.
+  const merge = Math.min(1, p * 1.2);
+
+  const angle = SWIPE_ANGLES[shapeSwapDirection];
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const diag = Math.hypot(cssW, cssH);
+  const bandSize = diag * 4;
+  const travelHalf = diag * 2;
+  const offset = -travelHalf + p * 2 * travelHalf;
+  const bandCx = cssW / 2 + dx * offset;
+  const bandCy = cssH / 2 + dy * offset;
+
+  hud.save();
+  hud.translate(bandCx, bandCy);
+  hud.rotate(angle);
+  hud.beginPath();
+  hud.rect(-bandSize / 2, -bandSize / 2, bandSize, bandSize);
+  hud.clip();
+  hud.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  hud.fillStyle = "#000";
+  hud.fillRect(0, 0, cssW, cssH);
+
+  // Madeon-style cyan vertical gradient shared by the waves and the shape
+  // name — pale top, hot cyan mid, deep teal bottom. Spans the screen
+  // height so each row of waves picks up a different colour band.
+  const cyanGrad = hud.createLinearGradient(0, 0, 0, cssH);
+  cyanGrad.addColorStop(0, "#bff5ff");
+  cyanGrad.addColorStop(0.5, "#3afeff");
+  cyanGrad.addColorStop(1, "#0e7c8c");
+
+  const N = 7;
+  const ROWS = 6;
+  const baseAmp = 6;
+  const finalAmp = 48;
+  const amp = baseAmp + (finalAmp - baseAmp) * merge;
+
+  // Oscilloscope reference grid — very dim cyan dotted lines, drawn under
+  // the waves to suggest a measurement screen.
+  hud.strokeStyle = "rgba(58, 254, 255, 0.12)";
+  hud.lineWidth = 0.5;
+  hud.setLineDash([2, 4]);
+  for (let v = 1; v < 8; v++) {
+    const x = (v / 8) * cssW;
+    hud.beginPath();
+    hud.moveTo(x, 0);
+    hud.lineTo(x, cssH);
+    hud.stroke();
+  }
+  for (let h = 1; h < ROWS * 3; h++) {
+    const y = (h / (ROWS * 3)) * cssH;
+    hud.beginPath();
+    hud.moveTo(0, y);
+    hud.lineTo(cssW, y);
+    hud.stroke();
+  }
+  hud.setLineDash([]);
+
+  hud.lineWidth = 1.4 + merge * 3;
+  hud.strokeStyle = cyanGrad;
+  // merge-driven alpha applied via globalAlpha so the gradient stops keep
+  // their pure colours.
+  hud.globalAlpha = 0.6 + merge * 0.4;
+  // Each row hosts its own merging wave group at its own vertical centre.
+  // Per-row phase offset keeps adjacent rows visually distinct rather than
+  // perfect copies. Per-wave (inside the row) phase decays to zero so the
+  // row's curves slide together as merge → 1.
+  const freq = 0.025;
+  const tickSpacing = 60;
+  for (let r = 0; r < ROWS; r++) {
+    const rowY = ((r + 1) / (ROWS + 1)) * cssH;
+    for (let i = 0; i < N; i++) {
+      const phase =
+        t * 4.8 + r * 0.5 + (i - (N - 1) / 2) * 1.0 * (1 - merge);
+      hud.beginPath();
+      for (let x = 0; x <= cssW; x += 4) {
+        const y = rowY + Math.sin(x * freq + phase) * amp;
+        if (x === 0) hud.moveTo(x, y);
+        else hud.lineTo(x, y);
+      }
+      hud.stroke();
+    }
+    // Tick marks crossing the centre wave of each row — small vertical
+    // segments at fixed x positions for a measurement-grid feel.
+    const centrePhase = t * 4.8 + r * 0.5;
+    hud.lineWidth = 0.5;
+    for (let x = tickSpacing / 2; x < cssW; x += tickSpacing) {
+      const y = rowY + Math.sin(x * freq + centrePhase) * amp;
+      hud.beginPath();
+      hud.moveTo(x, y - 3);
+      hud.lineTo(x, y + 3);
+      hud.stroke();
+    }
+    hud.lineWidth = 1.4 + merge * 3;
+  }
+  hud.globalAlpha = 1;
+
+  // Channel labels at the left edge — CH 01, CH 02, ...
+  hud.fillStyle = "rgba(58, 254, 255, 0.45)";
+  hud.font = `9px ${SWIPE_FONT}`;
+  hud.textAlign = "left";
+  hud.textBaseline = "middle";
+  for (let r = 0; r < ROWS; r++) {
+    const rowY = ((r + 1) / (ROWS + 1)) * cssH;
+    hud.fillText(`CH ${String(r + 1).padStart(2, "0")}`, 12, rowY);
+  }
+
+  drawSwipeName(cyanGrad);
+  hud.restore();
+}
+
+// Synapse-style transition — multiple rows of horizontal "wires" with
+// labelled shape-name nodes. The centre node opens at mid-transition,
+// halves slide apart with cyan glow between them, revealing the new shape
+// name. Locked to vertical band travel so the wires read horizontally.
+function drawSynapseSwipe() {
+  const t = 1 - shapeSwapTimer / SHAPE_SWAP_FRAMES;
+  const p = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+  // Band slide (same mechanism as drawBandSwipe / drawWavesSwipe).
+  const angle = SWIPE_ANGLES[shapeSwapDirection];
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const diag = Math.hypot(cssW, cssH);
+  const bandSize = diag * 4;
+  const travelHalf = diag * 2;
+  const offset = -travelHalf + p * 2 * travelHalf;
+  const bandCx = cssW / 2 + dx * offset;
+  const bandCy = cssH / 2 + dy * offset;
+
+  hud.save();
+  hud.translate(bandCx, bandCy);
+  hud.rotate(angle);
+  hud.beginPath();
+  hud.rect(-bandSize / 2, -bandSize / 2, bandSize, bandSize);
+  hud.clip();
+  hud.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  hud.fillStyle = "#000";
+  hud.fillRect(0, 0, cssW, cssH);
+
+  if (synapseNetwork.length === 0) {
+    hud.restore();
+    return;
+  }
+
+  // Centre node of centre row is the target.
+  const targetRow = Math.floor(SYNAPSE_ROWS / 2);
+  const targetCol = Math.floor(SYNAPSE_NODES / 2);
+
+  // Node geometry — width scales down on narrow screens so 4 nodes fit
+  // without clipping at the edges.
+  const NODE_W = Math.min(120, cssW * 0.2);
+  const NODE_HALF = NODE_W / 2;
+  const NODE_H = 28;
+
+  const wireColor = "rgba(58, 254, 255, 0.35)";
+  const boxStroke = "rgba(58, 254, 255, 0.7)";
+  const textColor = "#bff5ff";
+  const nodeFont = `12px ${SWIPE_FONT}`;
+
+  // The network starts fully fragmented — every node has a gap, signalling
+  // "disconnected". The target node closes (gap → 0) over p = 0.4 → 0.7,
+  // becoming the single synapse that completes the circuit.
+  const DEFAULT_GAP = 22;
+  const closeAmount = Math.max(0, Math.min(1, (p - 0.4) / 0.3));
+
+  // Time-based phase for moving pulses on the wires — independent of the
+  // swipe progress so the dots glide at a constant velocity regardless of t.
+  const pulseClock = performance.now() / 1000;
+  const PULSE_SPEED = 180; // px/sec
+  const PULSES_PER_ROW = 3;
+
+  for (let r = 0; r < SYNAPSE_ROWS; r++) {
+    const rowY = (r + 0.5) * (cssH / SYNAPSE_ROWS);
+    const row = synapseNetwork[r];
+
+    // Dashed wire across the full row width.
+    hud.strokeStyle = wireColor;
+    hud.lineWidth = 1;
+    hud.setLineDash([8, 5]);
+    hud.beginPath();
+    hud.moveTo(0, rowY);
+    hud.lineTo(cssW, rowY);
+    hud.stroke();
+    hud.setLineDash([]);
+
+    // Pulse dots travelling along the wire — alternating direction per row
+    // so the network reads as bi-directional firing.
+    const dir = r % 2 === 0 ? 1 : -1;
+    for (let pi = 0; pi < PULSES_PER_ROW; pi++) {
+      const phase = (pi / PULSES_PER_ROW) * cssW;
+      let px = (phase + dir * pulseClock * PULSE_SPEED) % cssW;
+      if (px < 0) px += cssW;
+      hud.fillStyle = "rgba(58, 254, 255, 0.85)";
+      hud.beginPath();
+      hud.arc(px, rowY, 1.6, 0, Math.PI * 2);
+      hud.fill();
+    }
+
+    for (let i = 0; i < row.length; i++) {
+      const cx = (i + 0.5) * (cssW / row.length);
+      const isTarget = r === targetRow && i === targetCol;
+      const shapeIdx = isTarget ? currentShapeIdx : row[i];
+      const name = SHAPES[shapeIdx].name.toUpperCase();
+      const idLabel = String(shapeIdx + 1).padStart(2, "0");
+      const gap = isTarget ? DEFAULT_GAP * (1 - closeAmount) : DEFAULT_GAP;
+
+      // Burst halo behind the target node as it locks in (final 15%).
+      if (isTarget && closeAmount > 0.85) {
+        const ba = (closeAmount - 0.85) / 0.15;
+        const br = NODE_W * (0.6 + ba * 1.4);
+        const burst = hud.createRadialGradient(
+          cx, rowY, NODE_W * 0.4,
+          cx, rowY, br,
+        );
+        burst.addColorStop(0, `rgba(58, 254, 255, ${0.5 * ba})`);
+        burst.addColorStop(1, "rgba(58, 254, 255, 0)");
+        hud.fillStyle = burst;
+        hud.fillRect(cx - br, rowY - br, br * 2, br * 2);
+      }
+
+      // Two rounded half-boxes; outer corners rounded, inner corners square
+      // so the two halves visually fuse when the gap closes.
+      const leftX = cx - NODE_HALF - gap / 2;
+      const rightX = cx + gap / 2;
+      const RADII_L: [number, number, number, number] = [5, 0, 0, 5];
+      const RADII_R: [number, number, number, number] = [0, 5, 5, 0];
+      hud.fillStyle = "rgba(0, 0, 0, 0.85)";
+      hud.beginPath();
+      hud.roundRect(leftX, rowY - NODE_H / 2, NODE_HALF, NODE_H, RADII_L);
+      hud.fill();
+      hud.beginPath();
+      hud.roundRect(rightX, rowY - NODE_H / 2, NODE_HALF, NODE_H, RADII_R);
+      hud.fill();
+
+      // Target's outline brightens + thickens as it closes; others stay dim.
+      hud.strokeStyle = isTarget
+        ? `rgba(58, 254, 255, ${0.55 + closeAmount * 0.45})`
+        : boxStroke;
+      hud.lineWidth = isTarget ? 1.2 + closeAmount * 0.8 : 1;
+      hud.beginPath();
+      hud.roundRect(leftX, rowY - NODE_H / 2, NODE_HALF, NODE_H, RADII_L);
+      hud.stroke();
+      hud.beginPath();
+      hud.roundRect(rightX, rowY - NODE_H / 2, NODE_HALF, NODE_H, RADII_R);
+      hud.stroke();
+
+      // Cyan glow inside the closing gap — peaks while shrinking, vanishes
+      // when fully closed (no gap left to fill).
+      if (isTarget && gap > 1 && closeAmount > 0.05) {
+        const grad = hud.createLinearGradient(
+          cx - gap / 2,
+          rowY,
+          cx + gap / 2,
+          rowY,
+        );
+        grad.addColorStop(0, "rgba(58, 254, 255, 0)");
+        grad.addColorStop(0.5, `rgba(58, 254, 255, ${0.85 * closeAmount})`);
+        grad.addColorStop(1, "rgba(58, 254, 255, 0)");
+        hud.fillStyle = grad;
+        hud.fillRect(cx - gap / 2, rowY - NODE_H / 2, gap, NODE_H);
+      }
+
+      // Status indicator — open circle for disconnected, filled (per
+      // closeAmount) for the target as it connects.
+      const dotR = 2.5;
+      const dotX = leftX - 8;
+      const dotY = rowY;
+      hud.strokeStyle = "rgba(58, 254, 255, 0.7)";
+      hud.lineWidth = 0.9;
+      hud.beginPath();
+      hud.arc(dotX, dotY, dotR, 0, Math.PI * 2);
+      hud.stroke();
+      if (isTarget && closeAmount > 0.05) {
+        hud.fillStyle = `rgba(58, 254, 255, ${closeAmount})`;
+        hud.beginPath();
+        hud.arc(dotX, dotY, dotR, 0, Math.PI * 2);
+        hud.fill();
+      }
+
+      // Split the name — left half ends at the inner edge of the left box,
+      // right half starts at the inner edge of the right box.
+      const split = Math.ceil(name.length / 2);
+      const leftText = name.slice(0, split);
+      const rightText = name.slice(split);
+
+      hud.font = nodeFont;
+      hud.textBaseline = "middle";
+      hud.fillStyle = isTarget
+        ? `rgba(58, 254, 255, ${0.7 + closeAmount * 0.3})`
+        : textColor;
+      hud.textAlign = "right";
+      hud.fillText(leftText, cx - gap / 2 - 2, rowY);
+      hud.textAlign = "left";
+      hud.fillText(rightText, cx + gap / 2 + 2, rowY);
+
+      // ID caption below the node.
+      hud.font = `8px ${SWIPE_FONT}`;
+      hud.fillStyle = isTarget
+        ? "rgba(58, 254, 255, 0.85)"
+        : "rgba(58, 254, 255, 0.45)";
+      hud.textAlign = "center";
+      hud.textBaseline = "top";
+      hud.fillText(idLabel, cx, rowY + NODE_H / 2 + 3);
+    }
+  }
+
+  hud.restore();
+}
+
+// Shared text layout for whichever swipe style is active. Picks a font size
+// that fits the widest line into ~95% width and the total stack into ~85%
+// height, then renders each line stacked around screen centre.
+function drawSwipeName(fillStyle: string | CanvasGradient) {
   const lines = swipeNameLines(SHAPES[currentShapeIdx].name);
   hud.textAlign = "center";
   hud.textBaseline = "middle";
@@ -1811,13 +2360,12 @@ function drawShapeSwipe() {
   const fitHeight = (cssH * 0.85) / (lines.length * LINE_SPACING);
   const fontSize = Math.min(fitWidth, fitHeight) | 0;
   hud.font = `${fontSize}px ${SWIPE_FONT}`;
-  hud.fillStyle = `rgb(${swipeFg.r}, ${swipeFg.g}, ${swipeFg.b})`;
+  hud.fillStyle = fillStyle;
   const lineH = fontSize * LINE_SPACING;
   const startY = cssH / 2 - ((lines.length - 1) * lineH) / 2;
   for (let i = 0; i < lines.length; i++) {
     hud.fillText(lines[i], cssW / 2, startY + i * lineH);
   }
-  hud.restore();
 }
 
 // Long-form names for the swipe banner — return one entry per line. Short
@@ -2100,8 +2648,17 @@ function updatePostFX(mode: BgPaletteSet) {
     0.7 - (audioActive ? envBass * 0.15 : 0);
   vhsLevel += ((vhsActive ? 1 : 0) - vhsLevel) * 0.12;
   chromaticVignettePass.uniforms.uVhs.value = vhsLevel;
+  // Film grain — quiet baseline, lifts ~50% at strong bass so the texture
+  // breathes with the music.
+  chromaticVignettePass.uniforms.uGrain.value =
+    0.038 + (audioActive ? envBass * 0.045 : 0);
   chromaticVignettePass.uniforms.uTime.value = performance.now();
   chromaticVignettePass.uniforms.uResolution.value.set(cssW, cssH);
+  // Letterbox bars — fade in for feature shapes only.
+  const letterboxTarget = LETTERBOX_SHAPES.has(SHAPES[currentShapeIdx].name)
+    ? 1
+    : 0;
+  letterboxLevel += (letterboxTarget - letterboxLevel) * 0.07;
 }
 
 function frame() {
@@ -2149,7 +2706,7 @@ function frame() {
   // Active palette → scene background + materials + grid uniforms. setRGB
   // defaults to the linear working space, so we explicitly tag the input
   // as sRGB to match the swipe panel painted on the HUD canvas.
-  const mode = BG_MODES[currentBgIdx];
+  const mode = activeMode();
   (scene.background as THREE.Color).setRGB(
     mode.bg.r / 255,
     mode.bg.g / 255,
