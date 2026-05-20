@@ -108,11 +108,11 @@ const SWIPE_FONT = '"Bebas Neue", "Anton", "Archivo Black", sans-serif';
 const VHS_CHANCE = 0.1;
 
 const RUNIC_NAME_FONT =
-  '24px "Madeon Runes", ui-monospace, "SF Mono", Menlo, monospace';
+  '24px "Rune Glyphs", ui-monospace, "SF Mono", Menlo, monospace';
 
 // Warm up the rune font so the first runic name uses correct metrics.
 if ("fonts" in document) {
-  document.fonts.load("400 24px 'Madeon Runes'").catch(() => {});
+  document.fonts.load("400 24px 'Rune Glyphs'").catch(() => {});
 }
 
 const GRID_SPACING = 38;
@@ -255,7 +255,7 @@ let shapeRotY = 0.7;
 let currentShapeIdx = 0;
 let shapeSwapTimer = 0;
 let shapeSwapDirection = 0;
-const SWIPE_STYLES = ["band", "waves", "synapse"] as const;
+const SWIPE_STYLES = ["band", "waves", "synapse", "poster"] as const;
 type SwipeStyle = (typeof SWIPE_STYLES)[number];
 let shapeSwapStyle: SwipeStyle = "band";
 // Per-row, per-node shape names for the synapse style. Regenerated each
@@ -373,21 +373,21 @@ let stellaMorphTimer = 0;
 // dodeca into a 12-instance ring. Reuses the same instance count / scales /
 // morph duration as the stella collapse for visual symmetry.
 let dodecaMorphTimer = 0;
-// Octa transformation — "Contraption: Ramiel" rig: cycles smoothly between
-// the rigid octahedron and a layered tower (two pyramid tips + frustums +
-// counter-spinning discs + a tiny central core). A cosine bell curve drives
-// the deploy amount so there's no flat pause at either extreme; yaw runs at
-// a constant rate so the rig keeps spinning through the cycle's stillpoints.
+// Octa transformation rig — cycles smoothly between the rigid octahedron
+// and a layered tower (two pyramid tips + frustums + counter-spinning discs
+// + a tiny central core). A cosine bell curve drives the deploy amount so
+// there's no flat pause at either extreme; yaw runs at a constant rate so
+// the rig keeps spinning through the cycle's stillpoints.
 const OCTA_MORPH_FRAMES = 200;
 let octaMorphTimer = 0;
 // Fixed X tilt — yaw is the only animated rotation so the camera never
 // slides under the bottom disc, where the rig reads as flat tape edges.
-const RAMIEL_VIEW_TILT_X = 0.18;
+const RIG_TILT_X = 0.18;
 // Full revolutions per deploy/fold cycle. Decoupled from the deploy curve so
 // the spin doesn't stall at the extremes; raise for more aggressive motion.
-const RAMIEL_REVS_PER_CYCLE = 3;
-const RAMIEL_YAW_PER_FRAME =
-  (Math.PI * 2 * RAMIEL_REVS_PER_CYCLE) / OCTA_MORPH_FRAMES;
+const RIG_REVS_PER_CYCLE = 3;
+const RIG_YAW_PER_FRAME =
+  (Math.PI * 2 * RIG_REVS_PER_CYCLE) / OCTA_MORPH_FRAMES;
 
 
 // ---------------------------------------------------------------------------
@@ -507,11 +507,11 @@ heroGroup.add(heroEdges);
 scene.add(heroGroup);
 
 // ---------------------------------------------------------------------------
-// Ramiel "Contraption" rig — at rest the upper + lower square pyramids meet
-// at the equator to form a single octahedron. As the deploy amount rises,
-// the two halves separate vertically and the inner pieces (two octagonal
-// frustums, two counter-spinning discs, a tiny central octa core) grow from
-// zero scale to fill the gap.
+// Octa rig — at rest the upper + lower square pyramids meet at the equator
+// to form a single octahedron. As the deploy amount rises, the two halves
+// separate vertically and the inner pieces (two octagonal frustums, two
+// counter-spinning discs, a tiny central octa core) grow from zero scale
+// to fill the gap.
 // ---------------------------------------------------------------------------
 type Vec3 = readonly [number, number, number];
 
@@ -536,7 +536,7 @@ function flatGeometry(pos: number[], nor: number[]): THREE.BufferGeometry {
 // Square-base pyramid whose 4 base verts sit on the cardinal axes (matching
 // the project octahedron's equatorial verts). tipY > baseY → tip up;
 // reversing them flips winding so the lower octa half builds correctly.
-function makeRamielPyramid(
+function makePyramid(
   baseHalf: number,
   baseY: number,
   tipY: number,
@@ -571,7 +571,7 @@ function makeRamielPyramid(
 // Regular polygonal frustum / disc. rTop=0 collapses the top to a point;
 // rTop=rBot with a small |yTop-yBot| gives a flat plate. `twist` rotates
 // the polygon around Y so adjacent layers can stagger.
-function makeRamielFrustum(
+function makeFrustum(
   rTop: number,
   rBot: number,
   yTop: number,
@@ -604,39 +604,39 @@ function makeRamielFrustum(
   return flatGeometry(pos, nor);
 }
 
-type RamielPart = {
+type RigPart = {
   mesh: THREE.Mesh;
   restPos: THREE.Vector3;
   restScale: number;
   deployPos: THREE.Vector3;
   deployScale: number;
-  // Local Y self-rotation multiplier on ramielYaw. World yaw of the part is
+  // Local Y self-rotation multiplier on rigYaw. World yaw of the part is
   // (group yaw rate) + (spinMult × yaw rate). Used to counter-spin the discs
   // against the group rotation for a rich kinetic silhouette.
   spinMult?: number;
 };
-const ramielGroup = new THREE.Group();
-const ramielParts: RamielPart[] = [];
+const rigGroup = new THREE.Group();
+const rigParts: RigPart[] = [];
 
-function addRamielPart(
+function addRigPart(
   geom: THREE.BufferGeometry,
   restPos: Vec3,
   restScale: number,
   deployPos: Vec3,
   deployScale: number,
-): RamielPart {
+): RigPart {
   const mesh = new THREE.Mesh(geom, heroMat);
   // Edges inherit the mesh transform — same wireframe highlight as heroEdges.
   mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geom), edgeMat));
-  ramielGroup.add(mesh);
-  const part: RamielPart = {
+  rigGroup.add(mesh);
+  const part: RigPart = {
     mesh,
     restPos: new THREE.Vector3(...restPos),
     restScale,
     deployPos: new THREE.Vector3(...deployPos),
     deployScale,
   };
-  ramielParts.push(part);
+  rigParts.push(part);
   return part;
 }
 
@@ -646,33 +646,33 @@ function addRamielPart(
 {
   // Upper pyramid tip — covers the octa's upper half at rest, then shrinks
   // and lifts so it caps the deployed tower.
-  addRamielPart(makeRamielPyramid(1, 0, 1), [0, 0, 0], 1, [0, 1.55, 0], 0.55);
+  addRigPart(makePyramid(1, 0, 1), [0, 0, 0], 1, [0, 1.55, 0], 0.55);
   // Lower pyramid tip — mirror.
-  addRamielPart(makeRamielPyramid(1, 0, -1), [0, 0, 0], 1, [0, -1.55, 0], 0.55);
+  addRigPart(makePyramid(1, 0, -1), [0, 0, 0], 1, [0, -1.55, 0], 0.55);
   // Upper / lower frustums — narrow→wide between the pyramid tip and disc.
-  addRamielPart(
-    makeRamielFrustum(0.35, 0.85, 0.22, -0.22, 8, Math.PI / 8),
+  addRigPart(
+    makeFrustum(0.35, 0.85, 0.22, -0.22, 8, Math.PI / 8),
     [0, 0, 0], 0, [0, 1, 0], 1,
   );
-  addRamielPart(
-    makeRamielFrustum(0.85, 0.35, 0.22, -0.22, 8, Math.PI / 8),
+  addRigPart(
+    makeFrustum(0.85, 0.35, 0.22, -0.22, 8, Math.PI / 8),
     [0, 0, 0], 0, [0, -1, 0], 1,
   );
   // Upper / lower discs — wide octagonal plates, thin profile. spinMult
   // counter-spins each disc against the group yaw at a different rate so
   // the two slice past each other like a kinetic sculpture.
-  const discGeom = makeRamielFrustum(1.2, 1.2, 0.08, -0.08, 8, 0);
-  const upperDisc = addRamielPart(discGeom, [0, 0, 0], 0, [0, 0.55, 0], 1);
+  const discGeom = makeFrustum(1.2, 1.2, 0.08, -0.08, 8, 0);
+  const upperDisc = addRigPart(discGeom, [0, 0, 0], 0, [0, 0.55, 0], 1);
   upperDisc.spinMult = -2.5; // world rate = +1 − 2.5 = −1.5 (counter)
-  const lowerDisc = addRamielPart(discGeom, [0, 0, 0], 0, [0, -0.55, 0], 1);
+  const lowerDisc = addRigPart(discGeom, [0, 0, 0], 0, [0, -0.55, 0], 1);
   lowerDisc.spinMult = 1.5; // world rate = +2.5 (faster, same direction)
   // Central core — the floating dot revealed between the parted halves.
   // Reuses the project's octahedron geom at a fixed small scale.
   const octaCoreIdx = SHAPES.findIndex((s) => s.name === OCTA_SHAPE_NAME);
-  addRamielPart(geomCache[octaCoreIdx].faces, [0, 0, 0], 0, [0, 0, 0], 0.22);
+  addRigPart(geomCache[octaCoreIdx].faces, [0, 0, 0], 0, [0, 0, 0], 0.22);
 }
-ramielGroup.visible = false;
-scene.add(ramielGroup);
+rigGroup.visible = false;
+scene.add(rigGroup);
 
 // Cosine bell curve, 0 → 1 → 0 with no flat hold at either extreme. Velocity
 // tapers smoothly at the endpoints so the reversals don't read as snaps.
@@ -683,20 +683,20 @@ function octaDeployAmount(): number {
 
 // Accumulated yaw — incremented at a constant rate so the rig keeps spinning
 // through the deploy and fold extremes without ever appearing to stall.
-let ramielYaw = 0;
+let rigYaw = 0;
 
-function updateRamielPose() {
+function updateRig() {
   const deploy = octaDeployAmount();
-  ramielYaw += RAMIEL_YAW_PER_FRAME;
-  ramielGroup.rotation.y = ramielYaw;
-  ramielGroup.rotation.x = RAMIEL_VIEW_TILT_X;
-  for (const part of ramielParts) {
+  rigYaw += RIG_YAW_PER_FRAME;
+  rigGroup.rotation.y = rigYaw;
+  rigGroup.rotation.x = RIG_TILT_X;
+  for (const part of rigParts) {
     part.mesh.position.lerpVectors(part.restPos, part.deployPos, deploy);
     const scale =
       part.restScale + (part.deployScale - part.restScale) * deploy;
     part.mesh.scale.setScalar(scale);
     if (part.spinMult !== undefined) {
-      part.mesh.rotation.y = ramielYaw * part.spinMult;
+      part.mesh.rotation.y = rigYaw * part.spinMult;
     }
   }
 }
@@ -841,7 +841,7 @@ scene.add(gridMesh);
 
 // ---------------------------------------------------------------------------
 // Tetra-only backdrop — fills the screen with the tetra description rendered
-// in Madeon Runes. Drawn lazily once the rune font has loaded so glyph
+// in the rune-glyph font. Drawn lazily once the rune font has loaded so glyph
 // metrics are correct. Sits between the dot grid and the hero in render
 // order, toggled on only while the tetra is locked into its ▽ pose.
 // ---------------------------------------------------------------------------
@@ -856,7 +856,7 @@ function makeTetraRuneTexture(): THREE.CanvasTexture {
   const cx = c.getContext("2d")!;
   cx.clearRect(0, 0, w, h);
   cx.fillStyle = "#ffffff";
-  cx.font = '22px "Madeon Runes", monospace';
+  cx.font = '22px "Rune Glyphs", monospace';
   cx.textBaseline = "top";
   const lineH = 30;
   // Each row rotates the description so columns don't visually align into
@@ -954,7 +954,7 @@ const buildRuneTex = () => {
   tetraRuneReady = true;
 };
 if ("fonts" in document) {
-  document.fonts.load('22px "Madeon Runes"').finally(buildRuneTex);
+  document.fonts.load('22px "Rune Glyphs"').finally(buildRuneTex);
 } else {
   buildRuneTex();
 }
@@ -1407,6 +1407,30 @@ shapeSelect.addEventListener("change", () => {
   if (Number.isFinite(idx)) swapShape(idx);
 });
 
+// Collapsible controller panel — toggle hides the body while leaving the
+// small "controls" header visible. Persists across reloads via localStorage
+// so a returning user keeps their preferred state.
+const panelEl = document.getElementById("panel")!;
+const panelToggleBtn = document.getElementById(
+  "panelToggle",
+) as HTMLButtonElement;
+const PANEL_STORAGE_KEY = "polyhedra:panel-collapsed";
+function setPanelCollapsed(collapsed: boolean) {
+  panelEl.classList.toggle("collapsed", collapsed);
+  panelToggleBtn.setAttribute("aria-expanded", String(!collapsed));
+  try {
+    localStorage.setItem(PANEL_STORAGE_KEY, collapsed ? "1" : "0");
+  } catch {}
+}
+try {
+  if (localStorage.getItem(PANEL_STORAGE_KEY) === "1") {
+    setPanelCollapsed(true);
+  }
+} catch {}
+panelToggleBtn.addEventListener("click", () => {
+  setPanelCollapsed(!panelEl.classList.contains("collapsed"));
+});
+
 function readAudio() {
   if (!analyser || !audioActive) return;
   analyser.getByteFrequencyData(freqBuf);
@@ -1491,8 +1515,8 @@ function swapShape(targetIdx?: number) {
     spawnDodecaBurst();
     dodecaMorphTimer = STELLA_MORPH_FRAMES;
   } else if (swapName === OCTA_SHAPE_NAME) {
-    // Restart the octa→Ramiel transformation from the regular-octahedron
-    // form whenever the octa is (re)selected.
+    // Restart the octa-rig transformation from the regular-octahedron form
+    // whenever the octa is (re)selected.
     octaMorphTimer = 0;
     proliferateCount = 1;
   } else if (Math.random() < PROLIFERATE_CHANCE) {
@@ -1563,7 +1587,7 @@ function drawHUD(shakeX: number, shakeY: number) {
 
 // Viewfinder-style corner brackets + a tiny "session" metadata strip at the
 // bottom-left. Adds structure to empty corners and gives the canvas the
-// graphic-design feel of a Madeon / Alltta visual identity.
+// graphic-design feel of an electronic-music visual identity.
 function drawHUDFrame() {
   const mode = activeMode();
   hud.strokeStyle = mode.hudText;
@@ -1712,9 +1736,22 @@ function drawHUDText() {
   hud.fillStyle = accentColor;
   hud.fillText(shape.name.toUpperCase(), HUD_MARGIN, topY + 18);
 
+  // Stencil callout — data-dense polyhedron tag with face / vertex counts,
+  // bookended by block characters for the "shouting label" stencil feel.
+  const polyTag = String(currentShapeIdx + 1).padStart(3, "0");
+  const faceCount = String(shape.faces.length).padStart(2, "0");
+  const vertCount = String(shape.verts.length).padStart(2, "0");
+  hud.font = `700 12px ui-monospace, "JetBrains Mono", Menlo, monospace`;
+  hud.fillStyle = accentColor;
+  hud.fillText(
+    `▌ POLY—${polyTag}  F·${faceCount}  V·${vertCount} ▌`,
+    HUD_MARGIN,
+    topY + 50,
+  );
+
   hud.font = HUD_FONT;
   hud.fillStyle = textColor;
-  hud.fillText("polyhedra · studio", HUD_MARGIN, topY + 48);
+  hud.fillText("polyhedra · studio", HUD_MARGIN, topY + 68);
 
   // ---- Top-right: oscilloscope (when audio active), then BEAT + BPM ----
   if (audioActive) {
@@ -1828,6 +1865,7 @@ function drawShapeSwipe() {
   if (shapeSwapTimer <= 0) return;
   if (shapeSwapStyle === "waves") drawWavesSwipe();
   else if (shapeSwapStyle === "synapse") drawSynapseSwipe();
+  else if (shapeSwapStyle === "poster") drawPosterSwipe();
   else drawBandSwipe();
 }
 
@@ -1940,7 +1978,7 @@ function drawWavesSwipe() {
   hud.fillStyle = "#000";
   hud.fillRect(0, 0, cssW, cssH);
 
-  // Madeon-style cyan vertical gradient shared by the waves and the shape
+  // Cyan vertical gradient shared by the waves and the shape
   // name — pale top, hot cyan mid, deep teal bottom. Spans the screen
   // height so each row of waves picks up a different colour band.
   const cyanGrad = hud.createLinearGradient(0, 0, 0, cssH);
@@ -2242,6 +2280,182 @@ function drawSynapseSwipe() {
   hud.restore();
 }
 
+// Poster swipe — black / hot pink horizontal split, big shape name rotated
+// 90° clockwise (reads top→bottom) and inverse-coloured across the split,
+// ASCII glyph wall filling the upper half, broken block stripe along the
+// bottom edge. Two-colour palette — every element is either ink or pink.
+// Same red-leaning hot pink as the project's edge accent + PINK palette
+// mode, so the poster swipe sits in the same colour family as the rest
+// of the HUD instead of introducing a colder magenta.
+const POSTER_PINK = "#ff3b6b";
+const POSTER_INK = "#0a0a10";
+
+function drawPosterSwipe() {
+  const t = 1 - shapeSwapTimer / SHAPE_SWAP_FRAMES;
+  const p = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+  // Same sliding-band reveal mechanism as the other swipe styles.
+  const angle = SWIPE_ANGLES[shapeSwapDirection];
+  const dx = Math.cos(angle);
+  const dy = Math.sin(angle);
+  const diag = Math.hypot(cssW, cssH);
+  const bandSize = diag * 4;
+  const travelHalf = diag * 2;
+  const offset = -travelHalf + p * 2 * travelHalf;
+  const bandCx = cssW / 2 + dx * offset;
+  const bandCy = cssH / 2 + dy * offset;
+
+  hud.save();
+  hud.translate(bandCx, bandCy);
+  hud.rotate(angle);
+  hud.beginPath();
+  hud.rect(-bandSize / 2, -bandSize / 2, bandSize, bandSize);
+  hud.clip();
+  hud.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Horizontal split — black top half, pink bottom half. Slightly above
+  // centre to weight the pink lower band, echoing the reference poster.
+  const splitY = cssH * 0.46;
+  hud.fillStyle = POSTER_INK;
+  hud.fillRect(0, 0, cssW, splitY);
+  hud.fillStyle = POSTER_PINK;
+  hud.fillRect(0, splitY, cssW, cssH - splitY);
+
+  // ASCII glyph wall — fills the entire upper (black) half with pink
+  // alphanumeric noise, like a data dump backdrop.
+  drawPosterAscii(6, 6, cssW - 12, splitY - 12, 11);
+
+  // Halftone dot screen on the pink half — ink dots in a hex-packed grid
+  // whose radius grows from the split downward, so the lower band fades
+  // toward darker as the eye moves away from the headline.
+  drawPosterHalftone(splitY, cssH - 28);
+
+  // Bottom edge: broken alternating ink/pink blocks with slight jitter.
+  drawPosterBlockStripe(0, cssH - 28, cssW, 24);
+
+  // Big shape name — rotated 90° CW so it reads top→bottom across the
+  // canvas, inverse-coloured across the split (pink on the black half,
+  // ink on the pink half) so the headline is the bg of the opposite band.
+  drawPosterRotatedName(splitY);
+
+  hud.restore();
+}
+
+// Stable per-shape ASCII grid — seeded by currentShapeIdx so the glyph wall
+// holds steady through a swap instead of flickering each frame. Fills the
+// supplied rectangle with monospace alphanumeric noise, sized so cells span
+// the area edge to edge.
+function drawPosterAscii(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  lineH: number,
+) {
+  hud.fillStyle = POSTER_PINK;
+  hud.font = '9px ui-monospace, "JetBrains Mono", Menlo, monospace';
+  hud.textAlign = "left";
+  hud.textBaseline = "top";
+  const cellW = hud.measureText("M ").width || 9;
+  const cols = Math.ceil(width / cellW);
+  const lines = Math.ceil(height / lineH);
+  const seed = currentShapeIdx * 1009 + 31;
+  for (let i = 0; i < lines; i++) {
+    let s = "";
+    for (let j = 0; j < cols; j++) {
+      const h = ((seed + i * 37 + j * 17) * 2654435761) >>> 0;
+      const c = h % 36;
+      s += c < 10 ? String(c) : String.fromCharCode(65 + c - 10);
+      s += " ";
+    }
+    hud.fillText(s, x, y + i * lineH);
+  }
+}
+
+function drawPosterBlockStripe(x: number, y: number, w: number, h: number) {
+  const blockW = 26;
+  const count = Math.ceil(w / blockW);
+  for (let i = 0; i < count; i++) {
+    const bx = x + i * blockW;
+    const hash = (i * 2654435761) >>> 0;
+    const dy = ((hash >> 3) % 8) - 4;
+    const dh = h - ((hash >> 7) % 5);
+    hud.fillStyle = hash & 1 ? POSTER_INK : POSTER_PINK;
+    hud.fillRect(bx, y + dy, blockW - 3, dh);
+  }
+}
+
+// Hex-packed halftone dot field over the pink lower band. Coarse dots with
+// a diagonal traveling wave — sin(x · kx + y · ky − t · v) modulates each
+// dot's radius across the field while continuously phase-shifting with
+// time, so the screen reads as a flowing scan during the brief swipe.
+function drawPosterHalftone(yMin: number, yMax: number) {
+  const spacing = 22;
+  const maxR = 7;
+  const minR = 1.4;
+  hud.fillStyle = POSTER_INK;
+  const t = performance.now() * 0.001;
+  // sqrt(3)/2 row spacing keeps the hex packing visually even.
+  const rowStep = spacing * 0.866;
+  let row = 0;
+  for (let y = yMin + rowStep * 0.5; y < yMax; y += rowStep, row++) {
+    const xOffset = row & 1 ? spacing * 0.5 : 0;
+    for (let x = spacing * 0.5 + xOffset; x < cssW; x += spacing) {
+      const wave = Math.sin(x * 0.012 + y * 0.01 - t * 5);
+      const r = minR + (wave * 0.5 + 0.5) * (maxR - minR);
+      hud.beginPath();
+      hud.arc(x, y, r, 0, Math.PI * 2);
+      hud.fill();
+    }
+  }
+}
+
+function drawPosterRotatedName(splitY: number) {
+  const name = SHAPES[currentShapeIdx].name.toUpperCase();
+  // Compute the font size once so both passes use the same metrics.
+  const REF = 100;
+  hud.font = `900 ${REF}px ${SWIPE_FONT}`;
+  const refW = hud.measureText(name).width || 1;
+  // After rotation: text length axis = screen vertical (cssH), thickness
+  // axis = screen horizontal (cssW). Fit to ~88% of cssH or 55% of cssW,
+  // whichever is tighter, so longer names still sit comfortably.
+  const targetW = cssH * 0.88;
+  const targetH = cssW * 0.55;
+  const fontSize = Math.min((targetW / refW) * REF, targetH) | 0;
+
+  // Two-pass inverse rendering — the same rotated glyphs drawn twice, each
+  // clipped to one colour band and filled with the opposite colour. Where
+  // the text sits on the ink half it reads pink; where it crosses onto the
+  // pink half it reads ink. Strict two-colour design with no extra hue.
+  drawRotatedNameClipped(name, fontSize, 0, 0, cssW, splitY, POSTER_PINK);
+  drawRotatedNameClipped(
+    name, fontSize, 0, splitY, cssW, cssH - splitY, POSTER_INK,
+  );
+}
+
+function drawRotatedNameClipped(
+  name: string,
+  fontSize: number,
+  clipX: number,
+  clipY: number,
+  clipW: number,
+  clipH: number,
+  fillStyle: string,
+) {
+  hud.save();
+  hud.beginPath();
+  hud.rect(clipX, clipY, clipW, clipH);
+  hud.clip();
+  hud.translate(cssW / 2, cssH / 2);
+  hud.rotate(Math.PI / 2);
+  hud.font = `900 ${fontSize}px ${SWIPE_FONT}`;
+  hud.fillStyle = fillStyle;
+  hud.textAlign = "center";
+  hud.textBaseline = "middle";
+  hud.fillText(name, 0, 0);
+  hud.restore();
+}
+
 // Shared text layout for whichever swipe style is active. Picks a font size
 // that fits the widest line into ~95% width and the total stack into ~85%
 // height, then renders each line stacked around screen centre.
@@ -2275,6 +2489,7 @@ function swipeNameLines(name: string): string[] {
   if (name === "gstella") return ["GREAT STELLATED", "DODECAHEDRON"];
   return [name.toUpperCase()];
 }
+
 
 function drawSnareFlash() {
   if (flashTimer <= 0) return;
@@ -2425,16 +2640,16 @@ function renderHero(mode: BgPaletteSet) {
     tetraRuneUniforms.uTime.value = performance.now();
   }
 
-  // Ramiel transformation — while octa is current, octaMorphTimer wraps
+  // Octa rig transformation — while octa is current, octaMorphTimer wraps
   // continuously so the deploy/fold cosine cycle plays on repeat. Every
   // non-pyramid part has restScale=0, so the rig collapses cleanly to a
   // single octahedron silhouette at the resting endpoints of each cycle.
   const isOcta = shapeName === OCTA_SHAPE_NAME;
   if (isOcta) {
     octaMorphTimer = (octaMorphTimer + 1) % OCTA_MORPH_FRAMES;
-    updateRamielPose();
+    updateRig();
   }
-  ramielGroup.visible = isOcta;
+  rigGroup.visible = isOcta;
 
   advanceStellaMorph();
   advanceDodecaBurst();
@@ -2489,13 +2704,13 @@ function renderHero(mode: BgPaletteSet) {
     ? toWorldY(cssH / 2 + bouncePosY)
     : toWorldY(focalY + bouncePosY);
   heroGroup.position.set(px, py, 0);
-  // Octa is rendered exclusively via the Ramiel rig — its two pyramid halves
+  // Octa is rendered exclusively via the octa rig — its two pyramid halves
   // form the octahedron silhouette at rest, so heroGroup stays hidden the
   // entire time octa is current and the rig drives all the motion.
   if (isOcta) {
     heroGroup.visible = false;
-    ramielGroup.position.set(px, py, 0);
-    ramielGroup.scale.setScalar(heroSize);
+    rigGroup.position.set(px, py, 0);
+    rigGroup.scale.setScalar(heroSize);
   } else {
     heroGroup.visible = true;
     heroGroup.scale.setScalar(heroSize);

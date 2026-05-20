@@ -36,20 +36,20 @@
     />
     <style>
       @font-face {
-        font-family: "Madeon Runes";
-        src: url("/fonts/madeon-runes/MadeonRunes-Regular.otf") format("opentype");
+        font-family: "Rune Glyphs";
+        src: url("/fonts/rune-glyphs/RuneGlyphs-Regular.otf") format("opentype");
         font-weight: 400;
         font-display: swap;
       }
       @font-face {
-        font-family: "Madeon Runes";
-        src: url("/fonts/madeon-runes/MadeonRunes-Bold.otf") format("opentype");
+        font-family: "Rune Glyphs";
+        src: url("/fonts/rune-glyphs/RuneGlyphs-Bold.otf") format("opentype");
         font-weight: 700;
         font-display: swap;
       }
       @font-face {
-        font-family: "Madeon Runes";
-        src: url("/fonts/madeon-runes/MadeonRunes-Light.otf") format("opentype");
+        font-family: "Rune Glyphs";
+        src: url("/fonts/rune-glyphs/RuneGlyphs-Light.otf") format("opentype");
         font-weight: 300;
         font-display: swap;
       }
@@ -110,6 +110,43 @@
         display: grid;
         gap: 8px;
         min-width: 220px;
+      }
+      .panel-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        background: transparent;
+        border: none;
+        color: var(--muted);
+        font: 10px/1 var(--mono);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        padding: 0;
+        cursor: pointer;
+        text-align: left;
+      }
+      .panel-toggle:hover {
+        color: var(--ink);
+      }
+      .panel-chevron {
+        transition: transform 200ms ease;
+        font-size: 12px;
+        line-height: 1;
+      }
+      .panel-body {
+        display: grid;
+        gap: 8px;
+      }
+      .panel.collapsed {
+        min-width: 0;
+      }
+      .panel.collapsed .panel-chevron {
+        transform: rotate(-90deg);
+      }
+      .panel.collapsed .panel-body {
+        display: none;
       }
       .audio-row {
         display: flex;
@@ -342,26 +379,38 @@
         <button class="splash-cta">tap to enter</button>
       </div>
     </div>
-    <div class="panel">
-      <div class="audio-row">
-        <button id="micBtn">mic</button>
-        <button id="tabBtn">tab audio</button>
-        <button id="stopBtn" hidden>stop</button>
-      </div>
-      <div class="audio-hint">
-        <div><b>mic</b> — スマホはこちらでスピーカーから集音</div>
-        <div class="desktop-only">
-          <b>tab audio</b> — PCで別タブの BGM を取り込む
+    <div class="panel" id="panel">
+      <button
+        type="button"
+        class="panel-toggle"
+        id="panelToggle"
+        aria-expanded="true"
+        aria-controls="panelBody"
+      >
+        <span class="panel-label">controls</span>
+        <span class="panel-chevron" aria-hidden="true">▾</span>
+      </button>
+      <div class="panel-body" id="panelBody">
+        <div class="audio-row">
+          <button id="micBtn">mic</button>
+          <button id="tabBtn">tab audio</button>
+          <button id="stopBtn" hidden>stop</button>
         </div>
-      </div>
-      <div class="audio-status" id="audioStatus"></div>
-      <div class="bpm-row">
-        <button id="tapBtn">tap tempo</button>
-        <span id="tapBpm" class="bpm-readout">—</span>
-      </div>
-      <div class="shape-row">
-        <label for="shapeSelect" class="shape-label">shape</label>
-        <select id="shapeSelect"></select>
+        <div class="audio-hint">
+          <div><b>mic</b> — スマホはこちらでスピーカーから集音</div>
+          <div class="desktop-only">
+            <b>tab audio</b> — PCで別タブの BGM を取り込む
+          </div>
+        </div>
+        <div class="audio-status" id="audioStatus"></div>
+        <div class="bpm-row">
+          <button id="tapBtn">tap tempo</button>
+          <span id="tapBpm" class="bpm-readout">—</span>
+        </div>
+        <div class="shape-row">
+          <label for="shapeSelect" class="shape-label">shape</label>
+          <select id="shapeSelect"></select>
+        </div>
       </div>
     </div>
     <script type="module" src="/src/polyhedra.ts"></script>
