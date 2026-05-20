@@ -40,6 +40,7 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import {
   DEFAULT_SPIN,
+  DODECA_SHAPE_NAME,
   GSTELLA_SHAPE_NAME,
   type Polyhedron,
   SHAPES,
@@ -367,6 +368,10 @@ const STELLA_CIRCLE_SCALE = 0.18;
 const STELLA_MERGE_SCALE = 0.95; // per-instance scale at the convergence frame
 const STELLA_MORPH_FRAMES = 100;
 let stellaMorphTimer = 0;
+// Dodeca is the inverse of stella — burst outward from a single centred
+// dodeca into a 12-instance ring. Reuses the same instance count / scales /
+// morph duration as the stella collapse for visual symmetry.
+let dodecaMorphTimer = 0;
 
 
 // ---------------------------------------------------------------------------
@@ -547,6 +552,25 @@ function spawnStellaCircle() {
       scale: STELLA_CIRCLE_SCALE,
       rotOffX: angle * 0.7,
       rotOffY: angle * 1.3,
+    });
+  }
+}
+
+// Inverse of spawnStellaCircle — all 12 instances start stacked at the
+// centre at full single-mesh size, then advanceDodecaBurst spreads them
+// outward to a ring while shrinking to the per-instance scale.
+function spawnDodecaBurst() {
+  proliferateCount = STELLA_CIRCLE_COUNT;
+  heroInstances.length = 0;
+  const cx = cssW / 2;
+  const cy = cssH / 2;
+  for (let i = 0; i < STELLA_CIRCLE_COUNT; i++) {
+    heroInstances.push({
+      x: cx,
+      y: cy,
+      scale: STELLA_MERGE_SCALE,
+      rotOffX: 0,
+      rotOffY: 0,
     });
   }
 }
@@ -1246,13 +1270,17 @@ function swapShape(targetIdx?: number) {
     generateSynapseNetwork();
   }
   applyShape(currentShapeIdx);
-  // Layout rolls — stella always shows as a 12-pointed mandala ring; every
+  // Layout rolls — stella collapses inward, dodeca explodes outward; every
   // other shape (tetra included) rolls for the grid-swarm.
   const swapName = SHAPES[currentShapeIdx].name;
   const isStellaSwap = swapName === STELLA_SHAPE_NAME;
+  const isDodecaSwap = swapName === DODECA_SHAPE_NAME;
   if (isStellaSwap) {
     spawnStellaCircle();
     stellaMorphTimer = STELLA_MORPH_FRAMES;
+  } else if (isDodecaSwap) {
+    spawnDodecaBurst();
+    dodecaMorphTimer = STELLA_MORPH_FRAMES;
   } else if (Math.random() < PROLIFERATE_CHANCE) {
     spawnProliferation();
   } else {
@@ -2138,6 +2166,37 @@ function advanceStellaMorph() {
   if (stellaMorphTimer === 0) proliferateCount = 1;
 }
 
+// Mirror of advanceStellaMorph for dodeca — the 12 instances start stacked
+// at the centre and disperse outward to a ring, shrinking from MERGE_SCALE
+// to CIRCLE_SCALE and growing per-instance rotation offsets so each spins
+// to its own angle. proliferateCount stays at 12 when the timer expires.
+function advanceDodecaBurst() {
+  if (
+    dodecaMorphTimer <= 0 ||
+    proliferateCount !== STELLA_CIRCLE_COUNT ||
+    SHAPES[currentShapeIdx].name !== DODECA_SHAPE_NAME
+  ) {
+    return;
+  }
+  const t = 1 - dodecaMorphTimer / STELLA_MORPH_FRAMES;
+  const eased = t * t * (3 - 2 * t);
+  const cx = cssW / 2;
+  const cy = cssH / 2;
+  const radius = eased * Math.min(cssW, cssH) * 0.32;
+  const scale =
+    STELLA_MERGE_SCALE + eased * (STELLA_CIRCLE_SCALE - STELLA_MERGE_SCALE);
+  for (let i = 0; i < STELLA_CIRCLE_COUNT; i++) {
+    const angle = (i / STELLA_CIRCLE_COUNT) * Math.PI * 2 - Math.PI / 2;
+    const inst = heroInstances[i];
+    inst.x = cx + Math.cos(angle) * radius;
+    inst.y = cy + Math.sin(angle) * radius;
+    inst.scale = scale;
+    inst.rotOffX = angle * 0.7 * eased;
+    inst.rotOffY = angle * 1.3 * eased;
+  }
+  dodecaMorphTimer--;
+}
+
 // Hero rendering — rotation accumulation, size, position, and the swarm /
 // single-mesh dispatch. Also drives the tetra rune backdrop visibility and
 // the stella ring → centre morph.
@@ -2153,6 +2212,7 @@ function renderHero(mode: BgPaletteSet) {
   }
 
   advanceStellaMorph();
+  advanceDodecaBurst();
 
   // Per-shape spin profile during the swarm/ring phase; default once stella
   // has merged into a single big mesh.

@@ -5,6 +5,7 @@
 export const TETRA_SHAPE_NAME = "tetra";
 export const STELLA_SHAPE_NAME = "stella";
 export const GSTELLA_SHAPE_NAME = "gstella";
+export const DODECA_SHAPE_NAME = "dodeca";
 
 export type Face3 = { idx: number[]; n: [number, number, number] };
 export type Polyhedron = {
