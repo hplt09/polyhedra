@@ -42,6 +42,7 @@ import {
   DEFAULT_SPIN,
   DODECA_SHAPE_NAME,
   GSTELLA_SHAPE_NAME,
+  OCTA_SHAPE_NAME,
   type Polyhedron,
   SHAPES,
   SPIN_PROFILES,
@@ -372,6 +373,21 @@ let stellaMorphTimer = 0;
 // dodeca into a 12-instance ring. Reuses the same instance count / scales /
 // morph duration as the stella collapse for visual symmetry.
 let dodecaMorphTimer = 0;
+// Octa transformation — "Contraption: Ramiel" rig: cycles smoothly between
+// the rigid octahedron and a layered tower (two pyramid tips + frustums +
+// counter-spinning discs + a tiny central core). A cosine bell curve drives
+// the deploy amount so there's no flat pause at either extreme; yaw runs at
+// a constant rate so the rig keeps spinning through the cycle's stillpoints.
+const OCTA_MORPH_FRAMES = 200;
+let octaMorphTimer = 0;
+// Fixed X tilt — yaw is the only animated rotation so the camera never
+// slides under the bottom disc, where the rig reads as flat tape edges.
+const RAMIEL_VIEW_TILT_X = 0.18;
+// Full revolutions per deploy/fold cycle. Decoupled from the deploy curve so
+// the spin doesn't stall at the extremes; raise for more aggressive motion.
+const RAMIEL_REVS_PER_CYCLE = 3;
+const RAMIEL_YAW_PER_FRAME =
+  (Math.PI * 2 * RAMIEL_REVS_PER_CYCLE) / OCTA_MORPH_FRAMES;
 
 
 // ---------------------------------------------------------------------------
@@ -490,8 +506,201 @@ heroGroup.add(heroMesh);
 heroGroup.add(heroEdges);
 scene.add(heroGroup);
 
-// InstancedMesh used only when proliferateCount > 1 — single GPU draw call
-// renders every clone in the swarm at the cost of one matrix per instance.
+// ---------------------------------------------------------------------------
+// Ramiel "Contraption" rig — at rest the upper + lower square pyramids meet
+// at the equator to form a single octahedron. As the deploy amount rises,
+// the two halves separate vertically and the inner pieces (two octagonal
+// frustums, two counter-spinning discs, a tiny central octa core) grow from
+// zero scale to fill the gap.
+// ---------------------------------------------------------------------------
+type Vec3 = readonly [number, number, number];
+
+// Push one flat-shaded triangle (a→b→c CCW) into a positions + normals pair.
+// The normal is computed from the cross product so callers don't have to
+// pre-compute it; flat shading expects three identical per-vertex normals.
+function pushFlatTri(pos: number[], nor: number[], a: Vec3, b: Vec3, c: Vec3) {
+  const u = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+  const v = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+  const n = u.cross(v).normalize();
+  pos.push(...a, ...b, ...c);
+  for (let i = 0; i < 3; i++) nor.push(n.x, n.y, n.z);
+}
+
+function flatGeometry(pos: number[], nor: number[]): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+  return g;
+}
+
+// Square-base pyramid whose 4 base verts sit on the cardinal axes (matching
+// the project octahedron's equatorial verts). tipY > baseY → tip up;
+// reversing them flips winding so the lower octa half builds correctly.
+function makeRamielPyramid(
+  baseHalf: number,
+  baseY: number,
+  tipY: number,
+): THREE.BufferGeometry {
+  const tip: Vec3 = [0, tipY, 0];
+  const base: Vec3[] = [
+    [baseHalf, baseY, 0],
+    [0, baseY, baseHalf],
+    [-baseHalf, baseY, 0],
+    [0, baseY, -baseHalf],
+  ];
+  const pointsUp = tipY > baseY;
+  const pos: number[] = [];
+  const nor: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const cur = base[i];
+    const next = base[(i + 1) % 4];
+    if (pointsUp) pushFlatTri(pos, nor, tip, cur, next);
+    else pushFlatTri(pos, nor, tip, next, cur);
+  }
+  // Base cap — fan-triangulated, facing opposite the tip.
+  if (pointsUp) {
+    pushFlatTri(pos, nor, base[0], base[2], base[1]);
+    pushFlatTri(pos, nor, base[0], base[3], base[2]);
+  } else {
+    pushFlatTri(pos, nor, base[0], base[1], base[2]);
+    pushFlatTri(pos, nor, base[0], base[2], base[3]);
+  }
+  return flatGeometry(pos, nor);
+}
+
+// Regular polygonal frustum / disc. rTop=0 collapses the top to a point;
+// rTop=rBot with a small |yTop-yBot| gives a flat plate. `twist` rotates
+// the polygon around Y so adjacent layers can stagger.
+function makeRamielFrustum(
+  rTop: number,
+  rBot: number,
+  yTop: number,
+  yBot: number,
+  sides: number,
+  twist = 0,
+): THREE.BufferGeometry {
+  const top: Vec3[] = [];
+  const bot: Vec3[] = [];
+  for (let i = 0; i < sides; i++) {
+    const ang = (i / sides) * Math.PI * 2 + twist;
+    top.push([Math.cos(ang) * rTop, yTop, Math.sin(ang) * rTop]);
+    bot.push([Math.cos(ang) * rBot, yBot, Math.sin(ang) * rBot]);
+  }
+  const pos: number[] = [];
+  const nor: number[] = [];
+  for (let i = 0; i < sides; i++) {
+    const ni = (i + 1) % sides;
+    pushFlatTri(pos, nor, top[i], bot[i], bot[ni]);
+    pushFlatTri(pos, nor, top[i], bot[ni], top[ni]);
+  }
+  // End caps — fan-triangulated, skipped when the radius collapses to a point.
+  const CAP_EPS = 0.001;
+  for (let i = 1; i < sides - 1 && rTop > CAP_EPS; i++) {
+    pushFlatTri(pos, nor, top[0], top[i], top[i + 1]);
+  }
+  for (let i = 1; i < sides - 1 && rBot > CAP_EPS; i++) {
+    pushFlatTri(pos, nor, bot[0], bot[i + 1], bot[i]);
+  }
+  return flatGeometry(pos, nor);
+}
+
+type RamielPart = {
+  mesh: THREE.Mesh;
+  restPos: THREE.Vector3;
+  restScale: number;
+  deployPos: THREE.Vector3;
+  deployScale: number;
+  // Local Y self-rotation multiplier on ramielYaw. World yaw of the part is
+  // (group yaw rate) + (spinMult × yaw rate). Used to counter-spin the discs
+  // against the group rotation for a rich kinetic silhouette.
+  spinMult?: number;
+};
+const ramielGroup = new THREE.Group();
+const ramielParts: RamielPart[] = [];
+
+function addRamielPart(
+  geom: THREE.BufferGeometry,
+  restPos: Vec3,
+  restScale: number,
+  deployPos: Vec3,
+  deployScale: number,
+): RamielPart {
+  const mesh = new THREE.Mesh(geom, heroMat);
+  // Edges inherit the mesh transform — same wireframe highlight as heroEdges.
+  mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geom), edgeMat));
+  ramielGroup.add(mesh);
+  const part: RamielPart = {
+    mesh,
+    restPos: new THREE.Vector3(...restPos),
+    restScale,
+    deployPos: new THREE.Vector3(...deployPos),
+    deployScale,
+  };
+  ramielParts.push(part);
+  return part;
+}
+
+// Build the rig top → bottom. At rest only the two pyramids are visible —
+// together they form the octahedron silhouette. Every other part starts at
+// scale 0 and grows in as the deploy amount rises toward 1.
+{
+  // Upper pyramid tip — covers the octa's upper half at rest, then shrinks
+  // and lifts so it caps the deployed tower.
+  addRamielPart(makeRamielPyramid(1, 0, 1), [0, 0, 0], 1, [0, 1.55, 0], 0.55);
+  // Lower pyramid tip — mirror.
+  addRamielPart(makeRamielPyramid(1, 0, -1), [0, 0, 0], 1, [0, -1.55, 0], 0.55);
+  // Upper / lower frustums — narrow→wide between the pyramid tip and disc.
+  addRamielPart(
+    makeRamielFrustum(0.35, 0.85, 0.22, -0.22, 8, Math.PI / 8),
+    [0, 0, 0], 0, [0, 1, 0], 1,
+  );
+  addRamielPart(
+    makeRamielFrustum(0.85, 0.35, 0.22, -0.22, 8, Math.PI / 8),
+    [0, 0, 0], 0, [0, -1, 0], 1,
+  );
+  // Upper / lower discs — wide octagonal plates, thin profile. spinMult
+  // counter-spins each disc against the group yaw at a different rate so
+  // the two slice past each other like a kinetic sculpture.
+  const discGeom = makeRamielFrustum(1.2, 1.2, 0.08, -0.08, 8, 0);
+  const upperDisc = addRamielPart(discGeom, [0, 0, 0], 0, [0, 0.55, 0], 1);
+  upperDisc.spinMult = -2.5; // world rate = +1 − 2.5 = −1.5 (counter)
+  const lowerDisc = addRamielPart(discGeom, [0, 0, 0], 0, [0, -0.55, 0], 1);
+  lowerDisc.spinMult = 1.5; // world rate = +2.5 (faster, same direction)
+  // Central core — the floating dot revealed between the parted halves.
+  // Reuses the project's octahedron geom at a fixed small scale.
+  const octaCoreIdx = SHAPES.findIndex((s) => s.name === OCTA_SHAPE_NAME);
+  addRamielPart(geomCache[octaCoreIdx].faces, [0, 0, 0], 0, [0, 0, 0], 0.22);
+}
+ramielGroup.visible = false;
+scene.add(ramielGroup);
+
+// Cosine bell curve, 0 → 1 → 0 with no flat hold at either extreme. Velocity
+// tapers smoothly at the endpoints so the reversals don't read as snaps.
+function octaDeployAmount(): number {
+  const phase = (octaMorphTimer % OCTA_MORPH_FRAMES) / OCTA_MORPH_FRAMES;
+  return (1 - Math.cos(phase * Math.PI * 2)) / 2;
+}
+
+// Accumulated yaw — incremented at a constant rate so the rig keeps spinning
+// through the deploy and fold extremes without ever appearing to stall.
+let ramielYaw = 0;
+
+function updateRamielPose() {
+  const deploy = octaDeployAmount();
+  ramielYaw += RAMIEL_YAW_PER_FRAME;
+  ramielGroup.rotation.y = ramielYaw;
+  ramielGroup.rotation.x = RAMIEL_VIEW_TILT_X;
+  for (const part of ramielParts) {
+    part.mesh.position.lerpVectors(part.restPos, part.deployPos, deploy);
+    const scale =
+      part.restScale + (part.deployScale - part.restScale) * deploy;
+    part.mesh.scale.setScalar(scale);
+    if (part.spinMult !== undefined) {
+      part.mesh.rotation.y = ramielYaw * part.spinMult;
+    }
+  }
+}
+
 const instancedHero = new THREE.InstancedMesh(
   geomCache[0].faces,
   heroMat,
@@ -1281,6 +1490,11 @@ function swapShape(targetIdx?: number) {
   } else if (isDodecaSwap) {
     spawnDodecaBurst();
     dodecaMorphTimer = STELLA_MORPH_FRAMES;
+  } else if (swapName === OCTA_SHAPE_NAME) {
+    // Restart the octa→Ramiel transformation from the regular-octahedron
+    // form whenever the octa is (re)selected.
+    octaMorphTimer = 0;
+    proliferateCount = 1;
   } else if (Math.random() < PROLIFERATE_CHANCE) {
     spawnProliferation();
   } else {
@@ -2211,6 +2425,17 @@ function renderHero(mode: BgPaletteSet) {
     tetraRuneUniforms.uTime.value = performance.now();
   }
 
+  // Ramiel transformation — while octa is current, octaMorphTimer wraps
+  // continuously so the deploy/fold cosine cycle plays on repeat. Every
+  // non-pyramid part has restScale=0, so the rig collapses cleanly to a
+  // single octahedron silhouette at the resting endpoints of each cycle.
+  const isOcta = shapeName === OCTA_SHAPE_NAME;
+  if (isOcta) {
+    octaMorphTimer = (octaMorphTimer + 1) % OCTA_MORPH_FRAMES;
+    updateRamielPose();
+  }
+  ramielGroup.visible = isOcta;
+
   advanceStellaMorph();
   advanceDodecaBurst();
 
@@ -2256,19 +2481,25 @@ function renderHero(mode: BgPaletteSet) {
   }
 
   // ---- Single mode: hero mesh + edges with bounce + focal ----
-  heroGroup.visible = true;
   instancedHero.visible = false;
   heroGroup.rotation.x = shapeRotX;
   heroGroup.rotation.y = shapeRotY;
-  if (isStella) {
-    // Big final stella stays centred and just keeps spinning.
-    heroGroup.position.x = 0;
-    heroGroup.position.y = toWorldY(cssH / 2 + bouncePosY);
+  const px = isStella ? 0 : toWorldX(focalX);
+  const py = isStella
+    ? toWorldY(cssH / 2 + bouncePosY)
+    : toWorldY(focalY + bouncePosY);
+  heroGroup.position.set(px, py, 0);
+  // Octa is rendered exclusively via the Ramiel rig — its two pyramid halves
+  // form the octahedron silhouette at rest, so heroGroup stays hidden the
+  // entire time octa is current and the rig drives all the motion.
+  if (isOcta) {
+    heroGroup.visible = false;
+    ramielGroup.position.set(px, py, 0);
+    ramielGroup.scale.setScalar(heroSize);
   } else {
-    heroGroup.position.x = toWorldX(focalX);
-    heroGroup.position.y = toWorldY(focalY + bouncePosY);
+    heroGroup.visible = true;
+    heroGroup.scale.setScalar(heroSize);
   }
-  heroGroup.scale.setScalar(heroSize);
 }
 
 // Confetti physics + buffer write — one entry per live particle, oldest
