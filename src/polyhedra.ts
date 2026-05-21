@@ -11,26 +11,30 @@
 //   2.  Canvas + DPR sizing
 //   3.  Tunable constants (thresholds, frame budgets, font tokens)
 //   4.  BG palette (BG_MODES) + activeMode()
-//   5.  Module state (audio envelopes, timers, focal, swap, etc.)
+//   5.  Module state (audio envelopes, timers, focal, swap, ambient, etc.)
 //   6.  Session timer helper
 //   7.  three.js scene setup — renderer, camera, lights
 //   8.  Hero mesh + edges + InstancedMesh (uses SHAPES from ./shapes)
-//   9.  Dot-grid backdrop shader
-//   10. Tetra rune backdrop (lazy-loaded canvas texture)
-//   11. Particle system + shockwave system
-//   12. Post-processing (HDR target, bloom, chromatic+vignette+VHS+grain)
-//   13. Audio input (mic / tab audio / stop) + tap tempo + shape picker
-//   14. Helpers — toWorld*, hexToRgb01
-//   15. Splash overlay binding
-//   16. swapShape() + triggerDrop()
-//   17. HUD drawing — drawHUD, drawHUDFrame, drawHUDText, drawWaveform,
+//   9.  Octa rig factory (from ./octa-rig)
+//   10. Dot-grid backdrop shader
+//   11. Tetra rune backdrop (lazy-loaded canvas texture)
+//   12. Particle system + shockwave system
+//   13. Post-processing (HDR target, bloom, chromatic+vignette+VHS+grain, ASCII)
+//   14. Audio input (mic / tab audio / stop) + tap tempo + shape picker
+//   15. Helpers — toWorld*, hexToRgb01
+//   16. Splash overlay binding
+//   17. swapShape() + triggerDrop()
+//   18. HUD drawing — drawHUD, drawHUDFrame, drawHUDText, drawWaveform,
 //       drawLetterbox, drawSnareFlash
-//   18. Swipe drawing — drawShapeSwipe (dispatcher), band / waves / synapse
-//   19. Frame loop helpers — detectAudioOnsets, advanceStellaMorph,
+//   19. Swipe drawing — drawShapeSwipe (dispatcher), band / waves / synapse /
+//       poster + the poster halftone / block-stripe helpers
+//   20. Ambient mode + per-face vertex displacement
+//   21. Frame loop helpers — detectAudioOnsets, advanceStellaMorph,
 //       renderHero, updateParticleBuffers, updateShockwaveBuffers, updatePostFX
-//   20. frame() main loop
+//   22. frame() main loop
 //
 // Pure-data module: shape definitions + SPIN_PROFILES live in ./shapes.ts.
+// Self-contained module: the octa "Contraption" rig lives in ./octa-rig.ts.
 
 import * as THREE from "three";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -49,6 +53,7 @@ import {
   STELLA_SHAPE_NAME,
   TETRA_SHAPE_NAME,
 } from "./shapes";
+import { createOctaRig } from "./octa-rig";
 
 // ---------------------------------------------------------------------------
 // Canvases + sizing.
@@ -106,6 +111,30 @@ const INVERT_FLIP_CHANCE = 0.55;
 const SHAPE_SWAP_FRAMES = 36;
 const SWIPE_FONT = '"Bebas Neue", "Anton", "Archivo Black", sans-serif';
 const VHS_CHANCE = 0.1;
+
+// Ambient mode — engaged when current audio energy drops well below the
+// recent peak (relative threshold, not absolute), so breakdowns trigger it
+// even though most music never hits true silence. Slows the spin, dims the
+// bloom and clamps swipe styles so quiet sections feel dynamically distinct
+// from the loud ones.
+const QUIET_RATIO = 0.35; // current energy < 35% of recent peak counts as quiet
+const PEAK_DECAY = 0.9985; // ~7.7 s half-life so the peak tracks the last 10–15 s
+const QUIET_TO_AMBIENT_FRAMES = 150; // ~2.5 s at 60fps
+const AMBIENT_EXIT_FRAMES = 6;
+const AMBIENT_SPIN_MULT = 0.4;
+const AMBIENT_BLOOM_MULT = 0.55;
+
+// Per-kick bounce impulse — smaller than the shape-swap impulse, but applied
+// on every detected kick so the silhouette pulses on beat instead of only
+// once per swap. Mobile gets a stronger push since the mic-side bass envelope
+// arrives quieter even after the analyser-input gain boost.
+const KICK_BOUNCE_IMPULSE = IS_MOBILE ? 8.5 : 5.5;
+
+// Per-face vertex displacement — each face of the active polyhedron pushes
+// outward along its normal by audio energy in a dedicated frequency bin, so
+// the silhouette breathes with the music instead of just spinning rigidly.
+const DISPLACE_BASE = 0.045;
+const DISPLACE_BASS_MULT = 0.06;
 
 const RUNIC_NAME_FONT =
   '24px "Rune Glyphs", ui-monospace, "SF Mono", Menlo, monospace';
@@ -308,6 +337,18 @@ let dropCount = 0;
 // used to toggle. Audio resets it to 0; manual clicks (no audio) advance it.
 let currentBgIdx = 0;
 
+// Ambient mode + per-face displacement state.
+let quietFrames = 0;
+let ambientMode = false;
+let ambientExitTimer = 0;
+// Slow-decaying recent peak of total audio energy. Used as the reference
+// for relative-quiet detection so breakdowns trigger ambient even when the
+// absolute level is still well above zero.
+let peakEnergy = 0.5;
+// Per-face audio envelope (smoothed). Sized lazily to the active shape's
+// face count whenever the displacement function reads from it.
+const displaceEnv: number[] = [];
+
 type Shockwave = { age: number; strength: number; rotation: number };
 const shockwaves: Shockwave[] = [];
 
@@ -375,19 +416,15 @@ let stellaMorphTimer = 0;
 let dodecaMorphTimer = 0;
 // Octa transformation rig — cycles smoothly between the rigid octahedron
 // and a layered tower (two pyramid tips + frustums + counter-spinning discs
-// + a tiny central core). A cosine bell curve drives the deploy amount so
-// there's no flat pause at either extreme; yaw runs at a constant rate so
-// the rig keeps spinning through the cycle's stillpoints.
-const OCTA_MORPH_FRAMES = 200;
-let octaMorphTimer = 0;
+// + a tiny central core). The implementation lives in ./octa-rig; these
+// tunables drive the factory call below.
+const OCTA_RIG_CYCLE_FRAMES = 200;
 // Fixed X tilt — yaw is the only animated rotation so the camera never
 // slides under the bottom disc, where the rig reads as flat tape edges.
-const RIG_TILT_X = 0.18;
+const OCTA_RIG_TILT_X = 0.18;
 // Full revolutions per deploy/fold cycle. Decoupled from the deploy curve so
 // the spin doesn't stall at the extremes; raise for more aggressive motion.
-const RIG_REVS_PER_CYCLE = 3;
-const RIG_YAW_PER_FRAME =
-  (Math.PI * 2 * RIG_REVS_PER_CYCLE) / OCTA_MORPH_FRAMES;
+const OCTA_RIG_REVS_PER_CYCLE = 3;
 
 
 // ---------------------------------------------------------------------------
@@ -499,207 +536,27 @@ function buildGeometry(poly: Polyhedron): {
 
 const geomCache = SHAPES.map((p) => buildGeometry(p));
 
-const heroMesh = new THREE.Mesh(geomCache[0].faces, heroMat);
+// heroMesh keeps its own cloned position attribute so per-frame vertex
+// displacement (see applyDisplacement) can mutate it without touching the
+// shared geomCache that instancedHero references during swarm mode.
+const heroMesh = new THREE.Mesh(geomCache[0].faces.clone(), heroMat);
 const heroEdges = new THREE.LineSegments(geomCache[0].edges, edgeMat);
 const heroGroup = new THREE.Group();
 heroGroup.add(heroMesh);
 heroGroup.add(heroEdges);
 scene.add(heroGroup);
 
-// ---------------------------------------------------------------------------
-// Octa rig — at rest the upper + lower square pyramids meet at the equator
-// to form a single octahedron. As the deploy amount rises, the two halves
-// separate vertically and the inner pieces (two octagonal frustums, two
-// counter-spinning discs, a tiny central octa core) grow from zero scale
-// to fill the gap.
-// ---------------------------------------------------------------------------
-type Vec3 = readonly [number, number, number];
-
-// Push one flat-shaded triangle (a→b→c CCW) into a positions + normals pair.
-// The normal is computed from the cross product so callers don't have to
-// pre-compute it; flat shading expects three identical per-vertex normals.
-function pushFlatTri(pos: number[], nor: number[], a: Vec3, b: Vec3, c: Vec3) {
-  const u = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
-  const v = new THREE.Vector3(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
-  const n = u.cross(v).normalize();
-  pos.push(...a, ...b, ...c);
-  for (let i = 0; i < 3; i++) nor.push(n.x, n.y, n.z);
-}
-
-function flatGeometry(pos: number[], nor: number[]): THREE.BufferGeometry {
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
-  return g;
-}
-
-// Square-base pyramid whose 4 base verts sit on the cardinal axes (matching
-// the project octahedron's equatorial verts). tipY > baseY → tip up;
-// reversing them flips winding so the lower octa half builds correctly.
-function makePyramid(
-  baseHalf: number,
-  baseY: number,
-  tipY: number,
-): THREE.BufferGeometry {
-  const tip: Vec3 = [0, tipY, 0];
-  const base: Vec3[] = [
-    [baseHalf, baseY, 0],
-    [0, baseY, baseHalf],
-    [-baseHalf, baseY, 0],
-    [0, baseY, -baseHalf],
-  ];
-  const pointsUp = tipY > baseY;
-  const pos: number[] = [];
-  const nor: number[] = [];
-  for (let i = 0; i < 4; i++) {
-    const cur = base[i];
-    const next = base[(i + 1) % 4];
-    if (pointsUp) pushFlatTri(pos, nor, tip, cur, next);
-    else pushFlatTri(pos, nor, tip, next, cur);
-  }
-  // Base cap — fan-triangulated, facing opposite the tip.
-  if (pointsUp) {
-    pushFlatTri(pos, nor, base[0], base[2], base[1]);
-    pushFlatTri(pos, nor, base[0], base[3], base[2]);
-  } else {
-    pushFlatTri(pos, nor, base[0], base[1], base[2]);
-    pushFlatTri(pos, nor, base[0], base[2], base[3]);
-  }
-  return flatGeometry(pos, nor);
-}
-
-// Regular polygonal frustum / disc. rTop=0 collapses the top to a point;
-// rTop=rBot with a small |yTop-yBot| gives a flat plate. `twist` rotates
-// the polygon around Y so adjacent layers can stagger.
-function makeFrustum(
-  rTop: number,
-  rBot: number,
-  yTop: number,
-  yBot: number,
-  sides: number,
-  twist = 0,
-): THREE.BufferGeometry {
-  const top: Vec3[] = [];
-  const bot: Vec3[] = [];
-  for (let i = 0; i < sides; i++) {
-    const ang = (i / sides) * Math.PI * 2 + twist;
-    top.push([Math.cos(ang) * rTop, yTop, Math.sin(ang) * rTop]);
-    bot.push([Math.cos(ang) * rBot, yBot, Math.sin(ang) * rBot]);
-  }
-  const pos: number[] = [];
-  const nor: number[] = [];
-  for (let i = 0; i < sides; i++) {
-    const ni = (i + 1) % sides;
-    pushFlatTri(pos, nor, top[i], bot[i], bot[ni]);
-    pushFlatTri(pos, nor, top[i], bot[ni], top[ni]);
-  }
-  // End caps — fan-triangulated, skipped when the radius collapses to a point.
-  const CAP_EPS = 0.001;
-  for (let i = 1; i < sides - 1 && rTop > CAP_EPS; i++) {
-    pushFlatTri(pos, nor, top[0], top[i], top[i + 1]);
-  }
-  for (let i = 1; i < sides - 1 && rBot > CAP_EPS; i++) {
-    pushFlatTri(pos, nor, bot[0], bot[i + 1], bot[i]);
-  }
-  return flatGeometry(pos, nor);
-}
-
-type RigPart = {
-  mesh: THREE.Mesh;
-  restPos: THREE.Vector3;
-  restScale: number;
-  deployPos: THREE.Vector3;
-  deployScale: number;
-  // Local Y self-rotation multiplier on rigYaw. World yaw of the part is
-  // (group yaw rate) + (spinMult × yaw rate). Used to counter-spin the discs
-  // against the group rotation for a rich kinetic silhouette.
-  spinMult?: number;
-};
-const rigGroup = new THREE.Group();
-const rigParts: RigPart[] = [];
-
-function addRigPart(
-  geom: THREE.BufferGeometry,
-  restPos: Vec3,
-  restScale: number,
-  deployPos: Vec3,
-  deployScale: number,
-): RigPart {
-  const mesh = new THREE.Mesh(geom, heroMat);
-  // Edges inherit the mesh transform — same wireframe highlight as heroEdges.
-  mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(geom), edgeMat));
-  rigGroup.add(mesh);
-  const part: RigPart = {
-    mesh,
-    restPos: new THREE.Vector3(...restPos),
-    restScale,
-    deployPos: new THREE.Vector3(...deployPos),
-    deployScale,
-  };
-  rigParts.push(part);
-  return part;
-}
-
-// Build the rig top → bottom. At rest only the two pyramids are visible —
-// together they form the octahedron silhouette. Every other part starts at
-// scale 0 and grows in as the deploy amount rises toward 1.
-{
-  // Upper pyramid tip — covers the octa's upper half at rest, then shrinks
-  // and lifts so it caps the deployed tower.
-  addRigPart(makePyramid(1, 0, 1), [0, 0, 0], 1, [0, 1.55, 0], 0.55);
-  // Lower pyramid tip — mirror.
-  addRigPart(makePyramid(1, 0, -1), [0, 0, 0], 1, [0, -1.55, 0], 0.55);
-  // Upper / lower frustums — narrow→wide between the pyramid tip and disc.
-  addRigPart(
-    makeFrustum(0.35, 0.85, 0.22, -0.22, 8, Math.PI / 8),
-    [0, 0, 0], 0, [0, 1, 0], 1,
-  );
-  addRigPart(
-    makeFrustum(0.85, 0.35, 0.22, -0.22, 8, Math.PI / 8),
-    [0, 0, 0], 0, [0, -1, 0], 1,
-  );
-  // Upper / lower discs — wide octagonal plates, thin profile. spinMult
-  // counter-spins each disc against the group yaw at a different rate so
-  // the two slice past each other like a kinetic sculpture.
-  const discGeom = makeFrustum(1.2, 1.2, 0.08, -0.08, 8, 0);
-  const upperDisc = addRigPart(discGeom, [0, 0, 0], 0, [0, 0.55, 0], 1);
-  upperDisc.spinMult = -2.5; // world rate = +1 − 2.5 = −1.5 (counter)
-  const lowerDisc = addRigPart(discGeom, [0, 0, 0], 0, [0, -0.55, 0], 1);
-  lowerDisc.spinMult = 1.5; // world rate = +2.5 (faster, same direction)
-  // Central core — the floating dot revealed between the parted halves.
-  // Reuses the project's octahedron geom at a fixed small scale.
-  const octaCoreIdx = SHAPES.findIndex((s) => s.name === OCTA_SHAPE_NAME);
-  addRigPart(geomCache[octaCoreIdx].faces, [0, 0, 0], 0, [0, 0, 0], 0.22);
-}
-rigGroup.visible = false;
-scene.add(rigGroup);
-
-// Cosine bell curve, 0 → 1 → 0 with no flat hold at either extreme. Velocity
-// tapers smoothly at the endpoints so the reversals don't read as snaps.
-function octaDeployAmount(): number {
-  const phase = (octaMorphTimer % OCTA_MORPH_FRAMES) / OCTA_MORPH_FRAMES;
-  return (1 - Math.cos(phase * Math.PI * 2)) / 2;
-}
-
-// Accumulated yaw — incremented at a constant rate so the rig keeps spinning
-// through the deploy and fold extremes without ever appearing to stall.
-let rigYaw = 0;
-
-function updateRig() {
-  const deploy = octaDeployAmount();
-  rigYaw += RIG_YAW_PER_FRAME;
-  rigGroup.rotation.y = rigYaw;
-  rigGroup.rotation.x = RIG_TILT_X;
-  for (const part of rigParts) {
-    part.mesh.position.lerpVectors(part.restPos, part.deployPos, deploy);
-    const scale =
-      part.restScale + (part.deployScale - part.restScale) * deploy;
-    part.mesh.scale.setScalar(scale);
-    if (part.spinMult !== undefined) {
-      part.mesh.rotation.y = rigYaw * part.spinMult;
-    }
-  }
-}
+// Octa "Contraption" rig — extracted into ./octa-rig as a self-contained
+// factory. Owns its own deploy timer and yaw, exposes update() + resetCycle.
+const octaRig = createOctaRig({
+  heroMat,
+  edgeMat,
+  coreGeom: geomCache[SHAPES.findIndex((s) => s.name === OCTA_SHAPE_NAME)].faces,
+  cycleFrames: OCTA_RIG_CYCLE_FRAMES,
+  revsPerCycle: OCTA_RIG_REVS_PER_CYCLE,
+  tiltX: OCTA_RIG_TILT_X,
+});
+scene.add(octaRig.group);
 
 const instancedHero = new THREE.InstancedMesh(
   geomCache[0].faces,
@@ -718,7 +575,10 @@ const _instScale = new THREE.Vector3();
 const _instEuler = new THREE.Euler();
 
 function applyShape(idx: number) {
-  heroMesh.geometry = geomCache[idx].faces;
+  // heroMesh gets a cloned geometry so per-frame vertex displacement can
+  // mutate it without affecting the shared cache that instancedHero reads.
+  heroMesh.geometry.dispose();
+  heroMesh.geometry = geomCache[idx].faces.clone();
   heroEdges.geometry = geomCache[idx].edges;
   instancedHero.geometry = geomCache[idx].faces;
 }
@@ -1169,8 +1029,100 @@ const chromaticVignettePass = new ShaderPass({
 });
 composer.addPass(chromaticVignettePass);
 
-// Tone-map HDR → display, sRGB conversion. Must be the last pass.
+// Tone-map HDR → display, sRGB conversion. Must run before the ASCII pass
+// so the ASCII shader reads already-display-space sRGB colours.
 composer.addPass(new OutputPass());
+
+// ---------------------------------------------------------------------------
+// ASCII post-process — replaces each character-sized screen cell with a
+// glyph from a mono atlas, picking the glyph by the cell-centre luminance.
+// Disabled by default; the ascii toggle in the controls panel flips it on
+// and persists the choice via localStorage.
+// ---------------------------------------------------------------------------
+const ASCII_CHARSET = " .:0258ACX@#";
+const ASCII_CELL_PX = 10;
+// Build the glyph atlas at the device's actual pixel density so the rendered
+// cells (cellPx × dpr device pixels) sample 1:1 from the atlas — keeps the
+// characters crisp on HiDPI screens instead of upscaling blurry CSS-pixel
+// glyphs. Capped at 2 to bound texture size on Retina+ displays.
+const ASCII_ATLAS_SCALE = Math.min(window.devicePixelRatio || 1, 2);
+
+function makeAsciiAtlas(
+  charset: string,
+  cellPx: number,
+  scale: number,
+): THREE.CanvasTexture {
+  const n = charset.length;
+  const px = cellPx * scale;
+  const c = document.createElement("canvas");
+  c.width = px * n;
+  c.height = px;
+  const ctx = c.getContext("2d")!;
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.fillStyle = "#fff";
+  // 0.85 of cell size keeps each glyph inside its cell box with minor margin.
+  ctx.font = `700 ${Math.floor(px * 0.85)}px ui-monospace, "JetBrains Mono", Menlo, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < n; i++) {
+    ctx.fillText(charset[i], i * px + px / 2, px / 2 + 1);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+const asciiPass = new ShaderPass({
+  uniforms: {
+    tDiffuse: { value: null },
+    uAtlas: {
+      value: makeAsciiAtlas(ASCII_CHARSET, ASCII_CELL_PX, ASCII_ATLAS_SCALE),
+    },
+    uResolution: { value: new THREE.Vector2(cssW, cssH) },
+    uCellSize: { value: ASCII_CELL_PX },
+    uCharCount: { value: ASCII_CHARSET.length },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    uniform sampler2D tDiffuse;
+    uniform sampler2D uAtlas;
+    uniform vec2 uResolution;
+    uniform float uCellSize;
+    uniform float uCharCount;
+    varying vec2 vUv;
+
+    void main() {
+      // CSS-pixel position; cells partition the canvas into uCellSize blocks.
+      vec2 pixel = vUv * uResolution;
+      vec2 cellOrigin = floor(pixel / uCellSize) * uCellSize;
+      // Sample the underlying scene at the cell centre — gives one stable
+      // colour + brightness per cell so glyph choice doesn't shimmer.
+      vec2 cellCenter = (cellOrigin + uCellSize * 0.5) / uResolution;
+      vec3 color = texture2D(tDiffuse, cellCenter).rgb;
+      float lum = dot(color, vec3(0.299, 0.587, 0.114));
+      // Brightness → glyph index. *0.999 keeps the index in range when lum=1.
+      float charIdx = floor(lum * uCharCount * 0.999);
+      // UV inside the cell, remapped to the atlas slot for that glyph.
+      vec2 inCell = (pixel - cellOrigin) / uCellSize;
+      vec2 atlasUv = vec2((charIdx + inCell.x) / uCharCount, inCell.y);
+      float glyph = texture2D(uAtlas, atlasUv).a;
+      // Glyph silhouette tinted by the sampled scene colour, on pure black.
+      gl_FragColor = vec4(color * glyph, 1.0);
+    }
+  `,
+});
+asciiPass.enabled = false;
+composer.addPass(asciiPass);
 
 // Hook up sizing for renderer + composer now that they exist.
 function resizeGL() {
@@ -1185,6 +1137,7 @@ function resizeGL() {
   gridUniforms.uResolution.value.set(cssW, cssH);
   (ptsMat.uniforms.uPixelRatio.value as number) = dpr;
   tetraRuneMesh.scale.set(cssW, cssH, 1);
+  asciiPass.uniforms.uResolution.value.set(cssW, cssH);
 }
 resizeGL();
 window.addEventListener("resize", () => {
@@ -1431,6 +1384,7 @@ panelToggleBtn.addEventListener("click", () => {
   setPanelCollapsed(!panelEl.classList.contains("collapsed"));
 });
 
+
 function readAudio() {
   if (!analyser || !audioActive) return;
   analyser.getByteFrequencyData(freqBuf);
@@ -1492,7 +1446,11 @@ function swapShape(targetIdx?: number) {
   shapeSwapTimer = SHAPE_SWAP_FRAMES;
   // 8 sweep directions — 4 cardinal + 4 diagonal.
   shapeSwapDirection = (Math.random() * 8) | 0;
-  shapeSwapStyle = SWIPE_STYLES[(Math.random() * SWIPE_STYLES.length) | 0];
+  // Ambient mode locks the swipe to the calm band style so quiet sections
+  // don't punctuate themselves with synapse fanfare or poster slabs.
+  shapeSwapStyle = ambientMode
+    ? "band"
+    : SWIPE_STYLES[(Math.random() * SWIPE_STYLES.length) | 0];
   // Waves only read clearly when sliding sideways — clamp to indices 2/3
   // (left→right / right→left) when the wave style is rolled.
   if (shapeSwapStyle === "waves") {
@@ -1517,7 +1475,7 @@ function swapShape(targetIdx?: number) {
   } else if (swapName === OCTA_SHAPE_NAME) {
     // Restart the octa-rig transformation from the regular-octahedron form
     // whenever the octa is (re)selected.
-    octaMorphTimer = 0;
+    octaRig.resetCycle();
     proliferateCount = 1;
   } else if (Math.random() < PROLIFERATE_CHANCE) {
     spawnProliferation();
@@ -1526,6 +1484,10 @@ function swapShape(targetIdx?: number) {
   }
   // Roll for VHS tape look.
   vhsActive = Math.random() < VHS_CHANCE;
+  // ASCII pairs with the poster swipe — same swap triggers both, so the
+  // character grid and the rotated headline land as one coordinated style
+  // moment.
+  asciiPass.enabled = shapeSwapStyle === "poster";
   const strength = audioActive ? Math.max(0.55, envBass) : 0.65;
   bounceVelY -= strength * KICK_IMPULSE;
   bounceScale = Math.max(bounceScale, strength);
@@ -2490,6 +2452,95 @@ function swipeNameLines(name: string): string[] {
   return [name.toUpperCase()];
 }
 
+// ---------------------------------------------------------------------------
+// Ambient mode — uses a relative threshold against the recent peak rather
+// than an absolute one, so breakdowns (which still carry significant pad /
+// vocal energy) reliably engage the mode. peakEnergy decays slowly so a
+// loud chorus stays "loud" for ~10–15 s and a real lull stands out.
+// ---------------------------------------------------------------------------
+function updateAmbientMode() {
+  if (!audioActive) {
+    quietFrames = 0;
+    ambientExitTimer = 0;
+    ambientMode = false;
+    return;
+  }
+  const energy = envBass + envMid + envHi;
+  // Peak follows energy instantly upward and decays smoothly downward.
+  peakEnergy = Math.max(energy, peakEnergy * PEAK_DECAY);
+  // Avoid divide-by-zero spikes at session start when peak is tiny.
+  const ratio = energy / Math.max(0.15, peakEnergy);
+  if (ratio < QUIET_RATIO) {
+    quietFrames = Math.min(quietFrames + 1, QUIET_TO_AMBIENT_FRAMES);
+    ambientExitTimer = 0;
+    if (quietFrames >= QUIET_TO_AMBIENT_FRAMES) ambientMode = true;
+  } else {
+    quietFrames = 0;
+    if (ambientMode) {
+      ambientExitTimer++;
+      if (ambientExitTimer >= AMBIENT_EXIT_FRAMES) {
+        ambientMode = false;
+        ambientExitTimer = 0;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-face vertex displacement — each face samples its own frequency bin
+// from freqBuf and pushes its triangle verts outward along the face normal.
+// The hero mesh uses a cloned BufferGeometry so the shared geomCache (used
+// by instancedHero in swarm mode) stays untouched.
+// ---------------------------------------------------------------------------
+function updateDisplaceEnv(poly: Polyhedron) {
+  // Decay every frame so bins fade when audio dies; smoothing also kills the
+  // FFT-bin frame-to-frame jitter that would otherwise make faces tremor.
+  while (displaceEnv.length < poly.faces.length) displaceEnv.push(0);
+  while (displaceEnv.length > poly.faces.length) displaceEnv.pop();
+  if (!audioActive || freqBuf.length === 0) {
+    for (let i = 0; i < displaceEnv.length; i++) displaceEnv[i] *= 0.88;
+    return;
+  }
+  // Bin selection — pick a bin per face from the lower 80 (full range would
+  // dump high-freq noise into the shape). The +3/×7 stride spreads adjacent
+  // faces across the spectrum so neighbouring faces don't pulse in lockstep.
+  const binMax = Math.min(80, freqBuf.length);
+  for (let i = 0; i < poly.faces.length; i++) {
+    const binIdx = (i * 7 + 3) % binMax;
+    const v = freqBuf[binIdx] / 255;
+    displaceEnv[i] = Math.max(v, displaceEnv[i] * 0.86);
+  }
+}
+
+function applyDisplacement(poly: Polyhedron, idx: number) {
+  const origPos = (geomCache[idx].faces.getAttribute("position") as
+    THREE.BufferAttribute).array as Float32Array;
+  const livePosAttr = heroMesh.geometry.getAttribute(
+    "position",
+  ) as THREE.BufferAttribute;
+  const livePos = livePosAttr.array as Float32Array;
+  // Audio-modulated amplitude — bass crests amplify the per-face push, so
+  // drops visibly inflate the silhouette beyond the per-bin response alone.
+  const scale = DISPLACE_BASE + envBass * DISPLACE_BASS_MULT;
+  let w = 0;
+  for (let fIdx = 0; fIdx < poly.faces.length; fIdx++) {
+    const f = poly.faces[fIdx];
+    const disp = displaceEnv[fIdx] * scale;
+    const dx = f.n[0] * disp;
+    const dy = f.n[1] * disp;
+    const dz = f.n[2] * disp;
+    const triCount = f.idx.length - 2;
+    for (let t = 0; t < triCount; t++) {
+      for (let v = 0; v < 3; v++) {
+        livePos[w] = origPos[w] + dx;
+        livePos[w + 1] = origPos[w + 1] + dy;
+        livePos[w + 2] = origPos[w + 2] + dz;
+        w += 3;
+      }
+    }
+  }
+  livePosAttr.needsUpdate = true;
+}
 
 function drawSnareFlash() {
   if (flashTimer <= 0) return;
@@ -2533,6 +2584,12 @@ function detectAudioOnsets() {
   ) {
     kickCooldown = KICK_COOLDOWN_FRAMES;
     kickCount++;
+    // Bounce impulse on every detected kick — strength scales with bass so
+    // light kicks tap, heavy kicks slam. Pairs with the existing shape-swap
+    // impulse but applies far more often, giving a clearer beat-to-bounce
+    // correspondence even between swaps.
+    bounceVelY -= envBass * KICK_BOUNCE_IMPULSE;
+    bounceScale = Math.max(bounceScale, envBass * 0.7);
     // When tap-locked, the beat grid drives shape swaps instead of kicks.
     if (lockedBpm === 0 && kickCount % KICKS_PER_SHAPE_SWAP === 0) {
       swapShape();
@@ -2640,28 +2697,29 @@ function renderHero(mode: BgPaletteSet) {
     tetraRuneUniforms.uTime.value = performance.now();
   }
 
-  // Octa rig transformation — while octa is current, octaMorphTimer wraps
-  // continuously so the deploy/fold cosine cycle plays on repeat. Every
-  // non-pyramid part has restScale=0, so the rig collapses cleanly to a
-  // single octahedron silhouette at the resting endpoints of each cycle.
+  // Octa rig transformation — while octa is current, the rig advances its
+  // own deploy/fold cycle. Every non-pyramid part has restScale=0, so the
+  // rig collapses cleanly to a single octahedron silhouette at the resting
+  // endpoints of each cycle.
   const isOcta = shapeName === OCTA_SHAPE_NAME;
-  if (isOcta) {
-    octaMorphTimer = (octaMorphTimer + 1) % OCTA_MORPH_FRAMES;
-    updateRig();
-  }
-  rigGroup.visible = isOcta;
+  if (isOcta) octaRig.update();
+  octaRig.group.visible = isOcta;
 
   advanceStellaMorph();
   advanceDodecaBurst();
 
   // Per-shape spin profile during the swarm/ring phase; default once stella
-  // has merged into a single big mesh.
+  // has merged into a single big mesh. Ambient mode dampens the spin so
+  // quiet sections settle into a slower drift.
   const spin =
     isStella && proliferateCount === 1
       ? DEFAULT_SPIN
       : (SPIN_PROFILES[shapeName] ?? DEFAULT_SPIN);
-  shapeRotX += spin.baseX + Math.pow(envBass, SHAPE_SPIN_EXP) * spin.bassMultX;
-  shapeRotY += spin.baseY + Math.pow(envMid, SHAPE_SPIN_EXP) * spin.midMultY;
+  const spinMult = ambientMode ? AMBIENT_SPIN_MULT : 1.0;
+  shapeRotX +=
+    (spin.baseX + Math.pow(envBass, SHAPE_SPIN_EXP) * spin.bassMultX) * spinMult;
+  shapeRotY +=
+    (spin.baseY + Math.pow(envMid, SHAPE_SPIN_EXP) * spin.midMultY) * spinMult;
   const pop = dropTimer > 0 ? 1 + (dropTimer / DROP_FRAMES) * 0.45 : 1;
   // swapPop kept modest so swap-time growth doesn't spike bloom contribution.
   const swapPop =
@@ -2709,11 +2767,17 @@ function renderHero(mode: BgPaletteSet) {
   // entire time octa is current and the rig drives all the motion.
   if (isOcta) {
     heroGroup.visible = false;
-    rigGroup.position.set(px, py, 0);
-    rigGroup.scale.setScalar(heroSize);
+    octaRig.group.position.set(px, py, 0);
+    octaRig.group.scale.setScalar(heroSize);
   } else {
     heroGroup.visible = true;
     heroGroup.scale.setScalar(heroSize);
+    // Audio-reactive face displacement — only applies in single-mesh mode
+    // and outside the octa rig path, since the rig owns its own geometry
+    // and the swarm shares geomCache with instancedHero.
+    const poly = SHAPES[currentShapeIdx];
+    updateDisplaceEnv(poly);
+    applyDisplacement(poly, currentShapeIdx);
   }
 }
 
@@ -2802,7 +2866,9 @@ function updateShockwaveBuffers(mode: BgPaletteSet) {
 // and the smoothly-lerped VHS intensity. HDR + tone mapping mean we don't
 // need huge linear-domain strengths.
 function updatePostFX(mode: BgPaletteSet) {
-  bloomPass.strength = mode.bloomStrength + (audioActive ? envBass * 0.35 : 0);
+  const ambientBloom = ambientMode ? AMBIENT_BLOOM_MULT : 1.0;
+  bloomPass.strength =
+    (mode.bloomStrength + (audioActive ? envBass * 0.35 : 0)) * ambientBloom;
   bloomPass.threshold = mode.bloomThreshold;
   const baselineChroma = 0.2;
   const audioChroma = audioActive ? envBass * 0.85 : 0;
@@ -2849,10 +2915,11 @@ function frame() {
     }
   }
 
-  // Focal glide + onset detection.
+  // Focal glide + onset detection + ambient-mode update.
   focalX += (targetFocalX - focalX) * 0.13;
   focalY += (targetFocalY - focalY) * 0.13;
   detectAudioOnsets();
+  updateAmbientMode();
 
   // Bounce spring + decay; timer ticks.
   bounceVelY += -bouncePosY * BOUNCE_STIFFNESS - bounceVelY * BOUNCE_DAMPING;
