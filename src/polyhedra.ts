@@ -54,6 +54,7 @@ import {
   TETRA_SHAPE_NAME,
 } from "./shapes";
 import { createOctaRig } from "./octa-rig";
+import { createNoise2D, createNoise3D } from "simplex-noise";
 
 // ---------------------------------------------------------------------------
 // Canvases + sizing.
@@ -348,6 +349,11 @@ let peakEnergy = 0.5;
 // Per-face audio envelope (smoothed). Sized lazily to the active shape's
 // face count whenever the displacement function reads from it.
 const displaceEnv: number[] = [];
+// Simplex noise generators — 2D for slow focal drift in ambient mode, 3D
+// for the poster swipe's halftone flow field. Pre-built so callers don't
+// allocate per frame.
+const focalNoise2D = createNoise2D();
+const halftoneNoise3D = createNoise3D();
 
 type Shockwave = { age: number; strength: number; rotation: number };
 const shockwaves: Shockwave[] = [];
@@ -1036,8 +1042,7 @@ composer.addPass(new OutputPass());
 // ---------------------------------------------------------------------------
 // ASCII post-process — replaces each character-sized screen cell with a
 // glyph from a mono atlas, picking the glyph by the cell-centre luminance.
-// Disabled by default; the ascii toggle in the controls panel flips it on
-// and persists the choice via localStorage.
+// Disabled by default; the poster swipe roll flips it on.
 // ---------------------------------------------------------------------------
 const ASCII_CHARSET = " .:0258ACX@#";
 const ASCII_CELL_PX = 10;
@@ -2348,9 +2353,9 @@ function drawPosterBlockStripe(x: number, y: number, w: number, h: number) {
 }
 
 // Hex-packed halftone dot field over the pink lower band. Coarse dots with
-// a diagonal traveling wave — sin(x · kx + y · ky − t · v) modulates each
-// dot's radius across the field while continuously phase-shifting with
-// time, so the screen reads as a flowing scan during the brief swipe.
+// a Simplex 3D flow field — noise(x, y, t) modulates each dot's radius for
+// an organic, swirling pattern that's noticeably less periodic than the
+// previous compound sine. Phase-shifts continuously with time.
 function drawPosterHalftone(yMin: number, yMax: number) {
   const spacing = 22;
   const maxR = 7;
@@ -2363,8 +2368,9 @@ function drawPosterHalftone(yMin: number, yMax: number) {
   for (let y = yMin + rowStep * 0.5; y < yMax; y += rowStep, row++) {
     const xOffset = row & 1 ? spacing * 0.5 : 0;
     for (let x = spacing * 0.5 + xOffset; x < cssW; x += spacing) {
-      const wave = Math.sin(x * 0.012 + y * 0.01 - t * 5);
-      const r = minR + (wave * 0.5 + 0.5) * (maxR - minR);
+      // Simplex returns roughly in [-1, 1]; remap to [0, 1] for radius mix.
+      const n = halftoneNoise3D(x * 0.022, y * 0.022, t * 1.4);
+      const r = minR + (n * 0.5 + 0.5) * (maxR - minR);
       hud.beginPath();
       hud.arc(x, y, r, 0, Math.PI * 2);
       hud.fill();
@@ -2483,6 +2489,16 @@ function updateAmbientMode() {
         ambientExitTimer = 0;
       }
     }
+  }
+
+  // Ambient idle drift — gently wander the focal point on a slow 2D Simplex
+  // walk so quiet sections breathe instead of pinning to one spot. Drives
+  // the targetFocal lerp the regular onsets already use, so transitions are
+  // automatically smoothed.
+  if (ambientMode) {
+    const t = performance.now() * 0.00012;
+    targetFocalX = cssW / 2 + focalNoise2D(t, 0) * cssW * 0.18;
+    targetFocalY = cssH / 2 + focalNoise2D(0, t) * cssH * 0.14;
   }
 }
 
@@ -2962,7 +2978,15 @@ function frame() {
 
   camera.position.x = sx;
   camera.position.y = -sy;
-  composer.render();
+  // Wrap composer.render so a shader compilation / pipeline error never
+  // takes down the rAF loop — the HUD canvas keeps animating and the user
+  // can still swipe to a different style that may recover.
+  try {
+    composer.render();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("composer.render() failed:", err);
+  }
   drawHUD(sx, -sy);
   requestAnimationFrame(frame);
 }
